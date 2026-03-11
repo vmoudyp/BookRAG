@@ -1,7 +1,6 @@
 """Chat router: query, session management."""
 import logging
 import os
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.models.requests import (
@@ -24,7 +23,19 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 CONFIG_PATH = os.getenv("BOOKRAG_CONFIG_PATH", "config/gbc.yaml")
 
 
-@router.post("/query", response_model=ChatQueryResponse)
+@router.post(
+    "/query",
+    response_model=ChatQueryResponse,
+    summary="Submit a chat query",
+    description=(
+        "Run a chat query against documents the caller can access. Requested `doc_ids` are "
+        "filtered by tenant/user permissions before retrieval. Visual sidecar request fields are "
+        "optional per-request overrides; omitted or `null` values keep the loaded `GBCRAGConfig` settings."
+    ),
+    responses={
+        403: {"description": "No accessible documents for this query."},
+    },
+)
 async def query(req: ChatQueryRequest, current_user: dict = Depends(rate_limit_query)):
     """Submit a query. Automatically filters to accessible documents."""
     tenant_id = current_user["tenant_id"]
@@ -52,7 +63,19 @@ async def query(req: ChatQueryRequest, current_user: dict = Depends(rate_limit_q
     return ChatQueryResponse(**result)
 
 
-@router.post("/sessions", response_model=SessionResponse, status_code=201)
+@router.post(
+    "/sessions",
+    response_model=SessionResponse,
+    status_code=201,
+    summary="Create a chat session",
+    description=(
+        "Create a new chat session for the current user. If `doc_ids` are provided, they are filtered to "
+        "documents the caller can access before being attached to the session."
+    ),
+    responses={
+        201: {"description": "Session created successfully."},
+    },
+)
 async def create_session(req: SessionCreateRequest, current_user: dict = Depends(get_current_user)):
     """Create a new chat session."""
     import uuid
@@ -69,7 +92,12 @@ async def create_session(req: SessionCreateRequest, current_user: dict = Depends
     return SessionResponse(session_id=session_id)
 
 
-@router.get("/sessions", response_model=SessionListResponse)
+@router.get(
+    "/sessions",
+    response_model=SessionListResponse,
+    summary="List chat sessions",
+    description="List chat sessions for the current user, newest first, with limit/offset pagination.",
+)
 async def list_sessions(
     limit: int = Query(default=50, ge=1, le=200, description="Max sessions to return"),
     offset: int = Query(default=0, ge=0, description="Number of sessions to skip"),
@@ -93,7 +121,17 @@ async def list_sessions(
     return SessionListResponse(sessions=items, total=total)
 
 
-@router.delete("/sessions/{session_id}", status_code=204)
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=204,
+    summary="Delete a chat session",
+    description="Delete a chat session and all stored messages. Allowed for the session owner or an admin.",
+    responses={
+        204: {"description": "Session deleted successfully."},
+        403: {"description": "Access denied."},
+        404: {"description": "Session not found."},
+    },
+)
 async def delete_session(session_id: str, current_user: dict = Depends(get_current_user)):
     """Delete a chat session and all its messages."""
     tenant_id = current_user["tenant_id"]
@@ -106,7 +144,16 @@ async def delete_session(session_id: str, current_user: dict = Depends(get_curre
     await db.delete_session(MONGO_URI, MONGO_DB_PREFIX, tenant_id, session_id)
 
 
-@router.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
+@router.get(
+    "/sessions/{session_id}/messages",
+    response_model=SessionMessagesResponse,
+    summary="Get session messages",
+    description="Retrieve paginated message history for a chat session. Allowed for the session owner or an admin.",
+    responses={
+        403: {"description": "Access denied."},
+        404: {"description": "Session not found."},
+    },
+)
 async def get_messages(
     session_id: str,
     limit: int = Query(default=100, ge=1, le=500, description="Max messages to return"),

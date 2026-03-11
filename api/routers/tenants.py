@@ -2,7 +2,7 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.models.requests import TenantCreateRequest, TenantResponse, PermissionGrantRequest
+from api.models.requests import TenantCreateRequest, TenantResponse, PermissionGrantRequest, SimpleMessageResponse
 from api.db import mongodb as db
 from api.dependencies import (
     MONGO_URI, MONGO_DB_PREFIX, MONGO_SYSTEM_DB,
@@ -13,7 +13,17 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    status_code=201,
+    response_model=SimpleMessageResponse,
+    summary="Create a tenant",
+    description="Create a new tenant workspace. This endpoint is restricted to admins.",
+    responses={
+        201: {"description": "Tenant created successfully."},
+        409: {"description": "Tenant already exists."},
+    },
+)
 async def create_tenant(req: TenantCreateRequest, _admin=Depends(require_admin)):
     """Create a new tenant (admin only)."""
     existing = await db.get_tenant(MONGO_URI, MONGO_SYSTEM_DB, req.tenant_id)
@@ -23,7 +33,16 @@ async def create_tenant(req: TenantCreateRequest, _admin=Depends(require_admin))
     return {"message": f"Tenant '{req.tenant_id}' created"}
 
 
-@router.get("/{tenant_id}", response_model=TenantResponse)
+@router.get(
+    "/{tenant_id}",
+    response_model=TenantResponse,
+    summary="Get tenant metadata",
+    description="Retrieve tenant information. Non-admin users may only access their own tenant.",
+    responses={
+        403: {"description": "Access denied."},
+        404: {"description": "Tenant not found."},
+    },
+)
 async def get_tenant(tenant_id: str, current_user=Depends(get_current_user)):
     """Retrieve tenant info. Users can only see their own tenant."""
     if current_user["role"] != "admin" and current_user["tenant_id"] != tenant_id:
@@ -38,7 +57,20 @@ async def get_tenant(tenant_id: str, current_user=Depends(get_current_user)):
     )
 
 
-@router.post("/{tenant_id}/permissions", status_code=201)
+@router.post(
+    "/{tenant_id}/permissions",
+    status_code=201,
+    response_model=SimpleMessageResponse,
+    summary="Grant document permission",
+    description=(
+        "Grant a user access to a document within a tenant. Allowed for admins, or for document owners "
+        "granting access within their own tenant."
+    ),
+    responses={
+        201: {"description": "Permission granted successfully."},
+        403: {"description": "Access denied or caller is not an owner/admin for the document."},
+    },
+)
 async def grant_permission(
     tenant_id: str,
     req: PermissionGrantRequest,

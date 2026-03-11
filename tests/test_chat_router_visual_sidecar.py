@@ -182,3 +182,69 @@ def test_chat_query_router_returns_403_when_no_accessible_docs(monkeypatch):
 
     assert response.status_code == 403
     assert response.json() == {"detail": "No accessible documents for this query"}
+
+
+def test_chat_query_router_openapi_documents_visual_sidecar_overrides(monkeypatch):
+    chat_module = _load_chat_router_module(monkeypatch)
+
+    with _build_test_client(chat_module) as client:
+        response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    query_op = schema["paths"]["/chat/query"]["post"]
+    assert query_op["summary"] == "Submit a chat query"
+    assert "optional per-request overrides" in query_op["description"]
+
+    request_ref = query_op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    request_schema_name = request_ref.rsplit("/", 1)[-1]
+    request_schema = schema["components"]["schemas"][request_schema_name]
+    properties = request_schema["properties"]
+
+    assert "visual_sidecar_query_enabled" in properties
+    assert "keep the loaded config value" in properties["visual_sidecar_query_enabled"]["description"]
+    assert "visual_sidecar_fusion_score_mode" in properties
+    assert "raw" in properties["visual_sidecar_fusion_score_mode"]["description"]
+    assert request_schema["examples"][0]["visual_sidecar_fusion_score_mode"] == "max_norm"
+
+    response_ref = query_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    response_schema_name = response_ref.rsplit("/", 1)[-1]
+    response_schema = schema["components"]["schemas"][response_schema_name]
+    assert response_schema["examples"][0]["session_id"] == "session-123"
+
+
+def test_chat_session_router_openapi_documents_session_endpoints(monkeypatch):
+    chat_module = _load_chat_router_module(monkeypatch)
+
+    with _build_test_client(chat_module) as client:
+        response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+
+    create_op = schema["paths"]["/chat/sessions"]["post"]
+    assert create_op["summary"] == "Create a chat session"
+    assert "filtered to documents the caller can access" in create_op["description"]
+    create_ref = create_op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    create_schema_name = create_ref.rsplit("/", 1)[-1]
+    create_schema = schema["components"]["schemas"][create_schema_name]
+    assert create_schema["examples"][0]["doc_ids"] == ["doc-123", "doc-456"]
+
+    list_op = schema["paths"]["/chat/sessions"]["get"]
+    assert list_op["summary"] == "List chat sessions"
+    list_params = {param["name"]: param for param in list_op["parameters"]}
+    assert list_params["limit"]["description"] == "Max sessions to return"
+
+    delete_op = schema["paths"]["/chat/sessions/{session_id}"]["delete"]
+    assert delete_op["summary"] == "Delete a chat session"
+    assert delete_op["responses"]["204"]["description"] == "Session deleted successfully."
+
+    messages_op = schema["paths"]["/chat/sessions/{session_id}/messages"]["get"]
+    assert messages_op["summary"] == "Get session messages"
+    assert messages_op["responses"]["404"]["description"] == "Session not found."
+
+    messages_schema = schema["components"]["schemas"]["SessionMessagesResponse"]
+    assert messages_schema["examples"][0]["messages"][0]["role"] == "user"
+
+    message_schema = schema["components"]["schemas"]["MessageResponse"]
+    assert "user" in message_schema["properties"]["role"]["description"]

@@ -2,7 +2,7 @@
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.models.requests import (
     EntityListResponse, EntityInfo,
@@ -28,7 +28,16 @@ async def _require_access(tenant_id: str, user_id: str, doc_id: str):
 
 # ── List ──────────────────────────────────────────────────────────────────────
 
-@router.get("/{doc_id}", response_model=EntityListResponse)
+@router.get(
+    "/{doc_id}",
+    response_model=EntityListResponse,
+    summary="List document entities",
+    description="Return all extracted entities for a document the caller can access.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        500: {"description": "Entity listing failed."},
+    },
+)
 async def list_entities(doc_id: str, current_user: dict = Depends(get_current_user)):
     """Return all NER entities for the given document."""
     tenant_id = current_user["tenant_id"]
@@ -49,7 +58,17 @@ async def list_entities(doc_id: str, current_user: dict = Depends(get_current_us
 
 # ── Rename ────────────────────────────────────────────────────────────────────
 
-@router.patch("/{doc_id}/rename", response_model=EntityOperationResponse)
+@router.patch(
+    "/{doc_id}/rename",
+    response_model=EntityOperationResponse,
+    summary="Rename an entity",
+    description="Rename an entity node and optionally update its type and description.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Entity not found."},
+        500: {"description": "Entity rename failed."},
+    },
+)
 async def rename_entity(
     doc_id: str,
     req: RenameEntityRequest,
@@ -84,7 +103,18 @@ async def rename_entity(
 
 # ── Merge ─────────────────────────────────────────────────────────────────────
 
-@router.post("/{doc_id}/merge", response_model=EntityOperationResponse)
+@router.post(
+    "/{doc_id}/merge",
+    response_model=EntityOperationResponse,
+    summary="Merge entities",
+    description="Merge two or more entities into a single canonical entity.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "One or more entities were not found."},
+        422: {"description": "At least two source entities are required."},
+        500: {"description": "Entity merge failed."},
+    },
+)
 async def merge_entities(
     doc_id: str,
     req: MergeEntitiesRequest,
@@ -122,7 +152,18 @@ async def merge_entities(
 
 # ── Split ─────────────────────────────────────────────────────────────────────
 
-@router.post("/{doc_id}/split", response_model=EntityOperationResponse)
+@router.post(
+    "/{doc_id}/split",
+    response_model=EntityOperationResponse,
+    summary="Split an entity",
+    description="Split one existing entity into two or more new entities.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Entity not found."},
+        422: {"description": "At least two new entities are required and `edge_mode` must be valid."},
+        500: {"description": "Entity split failed."},
+    },
+)
 async def split_entity(
     doc_id: str,
     req: SplitEntityRequest,
@@ -161,12 +202,22 @@ async def split_entity(
 
 # ── Suggest merges ────────────────────────────────────────────────────────────
 
-@router.get("/{doc_id}/suggestions", response_model=SuggestMergesResponse)
+@router.get(
+    "/{doc_id}/suggestions",
+    response_model=SuggestMergesResponse,
+    summary="Suggest entity merges",
+    description="Return ranked merge candidates for a document using string similarity or optional embedding similarity.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        422: {"description": "Invalid suggestion query parameters."},
+        500: {"description": "Suggestion generation failed."},
+    },
+)
 async def suggest_merges(
     doc_id: str,
-    min_score: float = 0.80,
-    top_k: int = 50,
-    use_embeddings: bool = False,
+    min_score: float = Query(default=0.80, ge=0.0, le=1.0, description="Minimum similarity score required to return a suggestion."),
+    top_k: int = Query(default=50, ge=1, description="Maximum number of merge suggestions to return."),
+    use_embeddings: bool = Query(default=False, description="Also use embedding similarity when available."),
     current_user: dict = Depends(get_current_user),
 ):
     """Return ranked merge-candidate pairs based on string/embedding similarity."""

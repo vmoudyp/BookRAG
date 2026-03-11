@@ -72,7 +72,22 @@ async def _save_and_register_file(
     }
 
 
-@router.post("", status_code=202, response_model=BatchUploadResponse)
+@router.post(
+    "",
+    status_code=202,
+    response_model=BatchUploadResponse,
+    summary="Upload PDF documents",
+    description=(
+        "Upload one or more PDF files and enqueue background indexing for each accepted file. "
+        "Optional `document_date` and `document_lang` form fields apply to all files in the request. "
+        "The response supports partial success through separate `uploaded` and `failed` lists."
+    ),
+    responses={
+        202: {"description": "Upload accepted; background indexing scheduled for accepted files."},
+        413: {"description": "One of the uploaded files exceeded the configured maximum upload size."},
+        422: {"description": "Invalid multipart form data or invalid `document_date` format."},
+    },
+)
 async def upload_documents(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
@@ -153,7 +168,12 @@ async def upload_documents(
     return BatchUploadResponse(uploaded=uploaded, failed=failed)
 
 
-@router.get("", response_model=List[DocumentResponse])
+@router.get(
+    "",
+    response_model=List[DocumentResponse],
+    summary="List accessible documents",
+    description="List documents accessible to the current user, sorted by `document_date` descending.",
+)
 async def list_documents(
     limit: int = Query(default=50, ge=1, le=200, description="Max documents to return"),
     offset: int = Query(default=0, ge=0, description="Number of documents to skip"),
@@ -171,12 +191,22 @@ async def list_documents(
             error=d.get("error"),
             created_at=d.get("created_at"),
             document_date=d.get("document_date"),
+            document_lang=d.get("document_lang"),
         )
         for d in docs
     ]
 
 
-@router.get("/{doc_id}", response_model=DocumentResponse)
+@router.get(
+    "/{doc_id}",
+    response_model=DocumentResponse,
+    summary="Get document status",
+    description="Return indexing status and stored metadata for a single accessible document.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Document not found."},
+    },
+)
 async def get_document_status(doc_id: str, current_user: dict = Depends(get_current_user)):
     """Get indexing status for a specific document."""
     tenant_id = current_user["tenant_id"]
@@ -195,10 +225,21 @@ async def get_document_status(doc_id: str, current_user: dict = Depends(get_curr
         error=doc.get("error"),
         created_at=doc.get("created_at"),
         document_date=doc.get("document_date"),
+        document_lang=doc.get("document_lang"),
     )
 
 
-@router.delete("/{doc_id}", status_code=204)
+@router.delete(
+    "/{doc_id}",
+    status_code=204,
+    summary="Delete a document",
+    description="Delete a document plus its associated upload, indexes, permissions, and best-effort graph artifacts.",
+    responses={
+        204: {"description": "Document deleted successfully."},
+        403: {"description": "Only document owners or admins can delete documents."},
+        404: {"description": "Document not found."},
+    },
+)
 async def delete_document(doc_id: str, current_user: dict = Depends(get_current_user)):
     """Delete a document and all associated indexes, VDB data, and FalkorDB graph.
 
@@ -258,7 +299,16 @@ async def delete_document(doc_id: str, current_user: dict = Depends(get_current_
     await db.delete_document(MONGO_URI, MONGO_DB_PREFIX, tenant_id, doc_id)
 
 
-@router.get("/{doc_id}/raw")
+@router.get(
+    "/{doc_id}/raw",
+    summary="Download the original PDF",
+    description="Stream back the original uploaded PDF file for an accessible document.",
+    responses={
+        200: {"description": "Original PDF stream."},
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Raw document file not found."},
+    },
+)
 async def download_raw_document(doc_id: str, current_user: dict = Depends(get_current_user)):
     """Stream back the original uploaded PDF file."""
     tenant_id = current_user["tenant_id"]

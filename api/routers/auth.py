@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from api.models.requests import RegisterRequest, LoginRequest, TokenResponse, RefreshRequest
+from api.models.requests import RegisterRequest, LoginRequest, TokenResponse, RefreshRequest, SimpleMessageResponse
 from api.db import mongodb as db
 from api.dependencies import (
     MONGO_URI, MONGO_DB_PREFIX, MONGO_SYSTEM_DB,
@@ -18,7 +18,18 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    status_code=status.HTTP_201_CREATED,
+    response_model=SimpleMessageResponse,
+    summary="Register a tenant user",
+    description="Create a new user account inside an existing tenant.",
+    responses={
+        201: {"description": "User registered successfully."},
+        404: {"description": "Tenant not found."},
+        409: {"description": "Username already registered in the tenant."},
+    },
+)
 async def register(req: RegisterRequest):
     """Register a new user within a tenant."""
     # Verify tenant exists
@@ -42,7 +53,16 @@ async def register(req: RegisterRequest):
     return {"message": "User registered successfully"}
 
 
-@router.post("/login", response_model=TokenResponse, dependencies=[Depends(rate_limit_login)])
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit_login)],
+    summary="Authenticate and obtain tokens",
+    description="Authenticate a tenant user and return a new access token plus a refresh token.",
+    responses={
+        401: {"description": "Incorrect username or password."},
+    },
+)
 async def login(req: LoginRequest):
     """Authenticate and return JWT access + refresh tokens."""
     user = await db.get_user_by_username(MONGO_URI, MONGO_DB_PREFIX, req.tenant_id, req.username)
@@ -69,7 +89,15 @@ async def login(req: LoginRequest):
     return TokenResponse(access_token=access, refresh_token=refresh)
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="Rotate refresh token",
+    description="Exchange a valid refresh token for a new access token and a new refresh token.",
+    responses={
+        401: {"description": "Refresh token is invalid or has been revoked."},
+    },
+)
 async def refresh_token(req: RefreshRequest):
     """Exchange a valid refresh token for a new access + refresh token pair.
 
@@ -100,7 +128,15 @@ async def refresh_token(req: RefreshRequest):
     return TokenResponse(access_token=new_access, refresh_token=new_refresh)
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Logout and revoke refresh token",
+    description="Revoke the provided refresh token for the current authenticated user.",
+    responses={
+        204: {"description": "Refresh token revoked successfully."},
+    },
+)
 async def logout(req: RefreshRequest, current_user: dict = Depends(get_current_user)):
     """Revoke the provided refresh token (logout)."""
     tenant_id = current_user["tenant_id"]

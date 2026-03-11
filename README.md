@@ -210,6 +210,22 @@ Notable current API capabilities:
 - editable entity graph operations
 - `/health` endpoint with MongoDB and optional FalkorDB checks
 
+### Document upload metadata
+
+`POST /documents` accepts multipart upload of one or more **PDF** files and starts background indexing for each accepted file.
+
+Useful form fields:
+
+- `files`: one or more PDF files
+- `document_date`: optional ISO-8601 timestamp applied to **all files in the request**
+- `document_lang`: optional ISO 639-1 code like `en` or `id`, or `auto`, also applied to **all files in the request**
+
+Current behavior:
+
+- non-PDF files are rejected per-file in the `failed` list
+- accepted files return `202 Accepted`
+- the response includes both `uploaded` and `failed` entries so partial success is visible to callers
+
 ### Chat query visual sidecar overrides
 
 `POST /chat/query` accepts optional per-request visual-sidecar overrides. When a field is omitted or set to `null`, the server keeps the loaded `GBCRAGConfig` value from its config file.
@@ -244,6 +260,23 @@ Example request body:
   "visual_sidecar_fusion_min_score": 0.2
 }
 ```
+
+### Chat sessions and history
+
+The chat router also exposes session/history endpoints under `/chat/sessions`.
+
+- `POST /chat/sessions`
+  - creates a new session for the current user
+  - optional `doc_ids` are filtered to accessible documents before they are stored on the session
+- `GET /chat/sessions`
+  - lists the current user's sessions
+  - supports `limit` and `offset`
+- `GET /chat/sessions/{session_id}/messages`
+  - returns paginated message history for the session
+  - supports `limit` and `offset`
+- `DELETE /chat/sessions/{session_id}`
+  - deletes a session and its messages
+  - allowed for the session owner or an admin
 
 ## Ontology and cross-document resolution
 
