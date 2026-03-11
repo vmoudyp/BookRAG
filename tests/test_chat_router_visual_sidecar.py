@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import uuid
 from pathlib import Path
 from types import ModuleType
 
@@ -81,6 +82,11 @@ def _build_test_client(chat_module):
     app = FastAPI()
     app.include_router(chat_module.router)
     app.dependency_overrides[chat_module.rate_limit_query] = lambda: {
+        "user_id": "user-1",
+        "tenant_id": "tenant-a",
+        "role": "user",
+    }
+    app.dependency_overrides[chat_module.get_current_user] = lambda: {
         "user_id": "user-1",
         "tenant_id": "tenant-a",
         "role": "user",
@@ -248,3 +254,164 @@ def test_chat_session_router_openapi_documents_session_endpoints(monkeypatch):
 
     message_schema = schema["components"]["schemas"]["MessageResponse"]
     assert "user" in message_schema["properties"]["role"]["description"]
+
+
+def test_chat_session_router_creates_session_with_accessible_docs(monkeypatch):
+    chat_module = _load_chat_router_module(monkeypatch)
+    captured = {}
+
+    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids):
+        captured["filter"] = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "requested_doc_ids": requested_doc_ids,
+        }
+        return ["doc-allowed"]
+
+    async def fake_create_session(uri, db_prefix, tenant_id, session_data):
+        captured["create_session"] = {
+            "uri": uri,
+            "db_prefix": db_prefix,
+            "tenant_id": tenant_id,
+            "session_data": session_data,
+        }
+        return "mongo-id-1"
+
+    monkeypatch.setattr(chat_module, "filter_accessible_docs", fake_filter_accessible_docs)
+    monkeypatch.setattr(chat_module.db, "create_session", fake_create_session, raising=False)
+    monkeypatch.setattr(uuid, "uuid4", lambda: "session-created")
+
+    with _build_test_client(chat_module) as client:
+        response = client.post("/chat/sessions", json={"doc_ids": ["doc-allowed", "doc-denied"]})
+
+    assert response.status_code == 201
+    assert response.json() == {"session_id": "session-created"}
+    assert captured["filter"] == {
+        "user_id": "user-1",
+        "tenant_id": "tenant-a",
+        "requested_doc_ids": ["doc-allowed", "doc-denied"],
+    }
+    assert captured["create_session"] == {
+        "uri": "mongodb://test",
+        "db_prefix": "bookrag_test",
+        "tenant_id": "tenant-a",
+        "session_data": {
+            "session_id": "session-created",
+            "user_id": "user-1",
+            "doc_ids": ["doc-allowed"],
+            "messages": [],
+        },
+    }
+
+
+def test_chat_session_router_lists_sessions(monkeypatch):
+    chat_module = _load_chat_router_module(monkeypatch)
+    captured = {}
+
+    async def fake_list_sessions(uri, db_prefix, tenant_id, user_id, limit=50, offset=0):
+        captured["list_sessions"] = {
+            "uri": uri,
+            "db_prefix": db_prefix,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        return ([{
+            "session_id": "session-1",
+            "created_at": "2026-03-11T12:00:00Z",
+            "message_count": 3,
+            "doc_ids": ["doc-1"],
+        }], 1)
+
+    monkeypatch.setattr(chat_module.db, "list_sessions", fake_list_sessions, raising=False)
+
+    with _build_test_client(chat_module) as client:
+        response = client.get("/chat/sessions?limit=10&offset=2")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "sessions": [{
+            "session_id": "session-1",
+            "created_at": "2026-03-11T12:00:00Z",
+            "message_count": 3,
+            "doc_ids": ["doc-1"],
+        }],
+        "total": 1,
+    }
+    assert captured["list_sessions"] == {
+        "uri": "mongodb://test",
+        "db_prefix": "bookrag_test",
+        "tenant_id": "tenant-a",
+        "user_id": "user-1",
+        "limit": 10,
+        "offset": 2,
+    }
+
+
+def test_chat_session_router_deletes_owned_session(monkeypatch):
+    chat_module = _load_chat_router_module(monkeypatch)
+    captured = {}
+
+    async def fake_get_session(uri, db_prefix, tenant_id, session_id):
+        captured["get_session"] = {
+            "uri": uri,
+            "db_prefix": db_prefix,
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+        }
+        return {"session_id": session_id, "user_id": "user-1"}
+
+    async def fake_delete_session(uri, db_prefix, tenant_id, session_id):
+        captured["delete_session"] = {
+            "uri": uri,
+            "db_prefix": db_prefix,
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+        }
+
+    monkeypatch.setattr(chat_module.db, "get_session", fake_get_session, raising=False)
+    monkeypatch.setattr(chat_module.db, "delete_session", fake_delete_session, raising=False)
+
+    with _build_test_client(chat_module) as client:
+        response = client.delete("/chat/sessions/session-1")
+
+    assert response.status_code == 204
+    assert response.text == ""
+    assert captured["get_session"]["session_id"] == "session-1"
+    assert captured["delete_session"] == {
+        "uri": "mongodb://test",
+        "db_prefix": "bookrag_test",
+        "tenant_id": "tenant-a",
+        "session_id": "session-1",
+    }
+
+
+def test_chat_session_router_returns_paginated_message_history(monkeypatch):
+    chat_module = _load_chat_router_module(monkeypatch)
+
+    async def fake_get_session(uri, db_prefix, tenant_id, session_id):
+        return {
+            "session_id": session_id,
+            "user_id": "user-1",
+            "messages": [
+                {"role": "user", "content": "first", "ts": "2026-03-11T12:00:00Z"},
+                {"role": "assistant", "content": "second", "ts": "2026-03-11T12:00:01Z"},
+                {"role": "user", "content": "third", "ts": "2026-03-11T12:00:02Z"},
+            ],
+        }
+
+    monkeypatch.setattr(chat_module.db, "get_session", fake_get_session, raising=False)
+
+    with _build_test_client(chat_module) as client:
+        response = client.get("/chat/sessions/session-1/messages?limit=2&offset=1")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "session_id": "session-1",
+        "messages": [
+            {"role": "assistant", "content": "second", "ts": "2026-03-11T12:00:01Z"},
+            {"role": "user", "content": "third", "ts": "2026-03-11T12:00:02Z"},
+        ],
+        "total": 3,
+    }

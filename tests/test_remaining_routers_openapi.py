@@ -128,10 +128,14 @@ def test_auth_router_openapi_includes_summaries_and_examples(monkeypatch):
 
     login_op = schema["paths"]["/auth/login"]["post"]
     assert login_op["summary"] == "Authenticate and obtain tokens"
+    assert login_op["responses"]["200"]["description"] == "Access and refresh tokens issued successfully."
     login_body_ref = login_op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     login_schema_name = login_body_ref.rsplit("/", 1)[-1]
     login_schema = schema["components"]["schemas"][login_schema_name]
     assert login_schema["examples"][0]["tenant_id"] == "tenant-a"
+
+    refresh_op = schema["paths"]["/auth/refresh"]["post"]
+    assert refresh_op["responses"]["200"]["description"] == "New access and refresh tokens issued successfully."
 
     token_schema = schema["components"]["schemas"]["TokenResponse"]
     assert token_schema["examples"][0]["token_type"] == "bearer"

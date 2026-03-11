@@ -60,6 +60,7 @@ async def register(req: RegisterRequest):
     summary="Authenticate and obtain tokens",
     description="Authenticate a tenant user and return a new access token plus a refresh token.",
     responses={
+        200: {"description": "Access and refresh tokens issued successfully."},
         401: {"description": "Incorrect username or password."},
     },
 )
@@ -95,6 +96,7 @@ async def login(req: LoginRequest):
     summary="Rotate refresh token",
     description="Exchange a valid refresh token for a new access token and a new refresh token.",
     responses={
+        200: {"description": "New access and refresh tokens issued successfully."},
         401: {"description": "Refresh token is invalid or has been revoked."},
     },
 )

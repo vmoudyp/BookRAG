@@ -97,6 +97,9 @@ async def create_session(req: SessionCreateRequest, current_user: dict = Depends
     response_model=SessionListResponse,
     summary="List chat sessions",
     description="List chat sessions for the current user, newest first, with limit/offset pagination.",
+    responses={
+        200: {"description": "Paginated chat sessions returned successfully."},
+    },
 )
 async def list_sessions(
     limit: int = Query(default=50, ge=1, le=200, description="Max sessions to return"),
@@ -150,6 +153,7 @@ async def delete_session(session_id: str, current_user: dict = Depends(get_curre
     summary="Get session messages",
     description="Retrieve paginated message history for a chat session. Allowed for the session owner or an admin.",
     responses={
+        200: {"description": "Paginated session messages returned successfully."},
         403: {"description": "Access denied."},
         404: {"description": "Session not found."},
     },

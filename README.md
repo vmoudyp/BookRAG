@@ -197,7 +197,10 @@ Implemented router surface:
 - `DELETE /documents/{doc_id}`
 - `GET /documents/{doc_id}/raw`
 - `POST /chat/query`
-- session management under `/chat/sessions`
+- `POST /chat/sessions`
+- `GET /chat/sessions`
+- `GET /chat/sessions/{session_id}/messages`
+- `DELETE /chat/sessions/{session_id}`
 - entity management under `/entities/{doc_id}`
 
 Notable current API capabilities:
@@ -225,6 +228,81 @@ Current behavior:
 - non-PDF files are rejected per-file in the `failed` list
 - accepted files return `202 Accepted`
 - the response includes both `uploaded` and `failed` entries so partial success is visible to callers
+
+### Auth and token lifecycle
+
+The auth endpoints are tenant-scoped: the same username may exist in different tenants, and login/registration always include `tenant_id`.
+
+Typical flow:
+
+1. `POST /auth/register` to create a tenant user
+2. `POST /auth/login` to obtain an access token and refresh token
+3. call protected endpoints with `Authorization: Bearer <access_token>`
+4. `POST /auth/refresh` when the access token expires
+5. `POST /auth/logout` to revoke the refresh token
+
+Example register request:
+
+```json
+{
+  "username": "alice",
+  "password": "StrongPass1",
+  "tenant_id": "tenant-a"
+}
+```
+
+Example register response (`201 Created`):
+
+```json
+{
+  "message": "User registered successfully"
+}
+```
+
+Example login request:
+
+```json
+{
+  "username": "alice",
+  "password": "StrongPass1",
+  "tenant_id": "tenant-a"
+}
+```
+
+Example login response (`200 OK`):
+
+```json
+{
+  "access_token": "access.jwt.token",
+  "refresh_token": "refresh.jwt.token",
+  "token_type": "bearer"
+}
+```
+
+Example refresh request:
+
+```json
+{
+  "refresh_token": "refresh.jwt.token"
+}
+```
+
+Example refresh response (`200 OK`):
+
+```json
+{
+  "access_token": "new.access.jwt.token",
+  "refresh_token": "new.refresh.jwt.token",
+  "token_type": "bearer"
+}
+```
+
+Logout behavior:
+
+- `POST /auth/logout`
+- request body: `{"refresh_token": "..."}`
+- response: `204 No Content`
+- the provided refresh token is revoked and should not be reused
 
 ### Chat query visual sidecar overrides
 
