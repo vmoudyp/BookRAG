@@ -427,23 +427,28 @@ class GBCRAG(BaseRAG):
         iter_context.iteration_image_nodes = image_nodes
         iter_context.iteration_text_nodes = text_nodes
 
-    def _augment_with_visual_sidecar(
+    def _visual_sidecar_requested(self) -> bool:
+        return bool(
+            getattr(self.cfg, "visual_sidecar_query_enabled", False)
+            or getattr(self.cfg, "visual_sidecar_fusion_enabled", False)
+        )
+
+    def _query_visual_sidecar_hits(
         self,
-        tree_node_ids: List[int],
         subtree_nodes: List[TreeNode],
         sub_query: str,
-    ) -> tuple[List[int], List[int]]:
-        if not getattr(self.cfg, "visual_sidecar_query_enabled", False):
-            return tree_node_ids, []
+    ) -> List[Dict[str, Any]]:
+        if not self._visual_sidecar_requested():
+            return []
 
         system_cfg = getattr(self.gbc_index, "config", None)
         sidecar_cfg = getattr(system_cfg, "visual_sidecar", None) if system_cfg else None
         save_path = getattr(system_cfg, "save_path", None) or getattr(self.gbc_index, "save_dir", None)
         if sidecar_cfg is None or not save_path:
-            return tree_node_ids, []
+            return []
 
         try:
-            visual_hits = query_visual_sidecar(
+            return query_visual_sidecar(
                 save_path=save_path,
                 sidecar_cfg=sidecar_cfg,
                 query_text=sub_query,
@@ -452,6 +457,69 @@ class GBCRAG(BaseRAG):
             )
         except Exception as exc:
             log.warning("Visual sidecar query failed for sub-query '%s': %s", sub_query, exc)
+            return []
+
+    def _build_visual_rerank_res(
+        self,
+        visual_hits: List[Dict[str, Any]],
+    ) -> List[tuple[int, float]]:
+        if not getattr(self.cfg, "visual_sidecar_fusion_enabled", False):
+            return []
+
+        fusion_weight = float(getattr(self.cfg, "visual_sidecar_fusion_weight", 1.0) or 0.0)
+        if fusion_weight <= 0:
+            return []
+
+        normalized_hits: List[tuple[int, float]] = []
+        seen_ids = set()
+        for hit in visual_hits:
+            node_id = hit.get("node_id")
+            score = hit.get("score")
+            try:
+                node_id = int(node_id)
+                score = float(score)
+            except (TypeError, ValueError):
+                continue
+
+            if node_id in seen_ids or score <= 0:
+                continue
+
+            normalized_hits.append((node_id, score))
+            seen_ids.add(node_id)
+
+        if not normalized_hits:
+            return []
+
+        score_mode = getattr(self.cfg, "visual_sidecar_fusion_score_mode", "raw") or "raw"
+        if score_mode == "max_norm":
+            max_score = max(score for _, score in normalized_hits)
+            calibrated_hits = [
+                (node_id, (score / max_score) if max_score > 0 else 0.0)
+                for node_id, score in normalized_hits
+            ]
+        elif score_mode == "rank":
+            calibrated_hits = [
+                (node_id, 1.0 / float(rank))
+                for rank, (node_id, _) in enumerate(normalized_hits, start=1)
+            ]
+        else:
+            calibrated_hits = normalized_hits
+
+        min_score = float(getattr(self.cfg, "visual_sidecar_fusion_min_score", 0.0) or 0.0)
+        visual_rerank_res = [
+            (node_id, score * fusion_weight)
+            for node_id, score in calibrated_hits
+            if score >= min_score
+        ]
+
+        return visual_rerank_res
+
+    def _augment_with_visual_sidecar(
+        self,
+        tree_node_ids: List[int],
+        visual_hits: List[Dict[str, Any]],
+    ) -> tuple[List[int], List[int]]:
+        if not getattr(self.cfg, "visual_sidecar_query_enabled", False):
             return tree_node_ids, []
 
         if not visual_hits:
@@ -510,14 +578,23 @@ class GBCRAG(BaseRAG):
 
         start_ent_map = iter_context.gbc_entity_map
 
+        visual_hits = self._query_visual_sidecar_hits(
+            subtree_nodes,
+            iter_context.sub_query,
+        )
+        visual_rerank_res = self._build_visual_rerank_res(visual_hits)
+
         tree_node_ids, res_entities = self.retriever.skyline_filter(
-            iter_context.sub_query, subtree_nodes, subgraph, start_ent_map
+            iter_context.sub_query,
+            subtree_nodes,
+            subgraph,
+            start_ent_map,
+            visual_rerank_res=visual_rerank_res,
         )
 
         tree_node_ids, supplementary_ids = self._augment_with_visual_sidecar(
             tree_node_ids,
-            subtree_nodes,
-            iter_context.sub_query,
+            visual_hits,
         )
         iter_context.supplementary_ids = supplementary_ids
 
@@ -663,7 +740,7 @@ class GBCRAG(BaseRAG):
         """Current GBC flow builds prompts via answer agents, so return the raw query."""
         return query
 
-    def generation(self, query: str, query_output_dir: str):
+    def _run_query(self, query: str) -> GBCRAGContext:
         context = GBCRAGContext(query=query)
 
         if self.varient == "wo_plan":
@@ -677,6 +754,16 @@ class GBCRAG(BaseRAG):
 
         context.plan = query_analysis
         self.process_analysis(context, query_analysis)
+
+        return context
+
+    def answer_query(self, query: str) -> str:
+        context = self._run_query(query)
+        log.info(f"Final answer for query '{query}': {context.final_answer}")
+        return context.final_answer
+
+    def generation(self, query: str, query_output_dir: str):
+        context = self._run_query(query)
 
         log.info(f"Final answer for query '{query}': {context.final_answer}")
         retrieval_ids = self._save_retrieval_res(context, query_output_dir)

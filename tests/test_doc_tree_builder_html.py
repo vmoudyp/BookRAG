@@ -469,7 +469,7 @@ def test_query_visual_sidecar_returns_ranked_visual_hits_from_prepared_corpus(tm
     assert hits[0]["retrieval_source"] == "prepared_corpus"
 
 
-def test_gbc_get_info_augments_tree_nodes_with_visual_sidecar_hits(tmp_path, monkeypatch):
+def test_gbc_get_info_fuses_visual_sidecar_scores_and_augments_missing_visual_hits(tmp_path, monkeypatch):
     image_path = tmp_path / "query-gbc.png"
     image_path.write_bytes(b"visual-backend")
 
@@ -517,7 +517,11 @@ def test_gbc_get_info_augments_tree_nodes_with_visual_sidecar_hits(tmp_path, mon
     )
 
     class FakeRetriever:
-        def skyline_filter(self, sub_query, subtree_nodes, subgraph, start_ent_map):
+        def __init__(self):
+            self.last_visual_rerank_res = None
+
+        def skyline_filter(self, sub_query, subtree_nodes, subgraph, start_ent_map, visual_rerank_res=None):
+            self.last_visual_rerank_res = visual_rerank_res
             return [text_node.index_id], []
 
     class FakeGraphIndex:
@@ -668,6 +672,8 @@ def test_gbc_get_info_augments_tree_nodes_with_visual_sidecar_hits(tmp_path, mon
     rag.cfg = GBCRAGConfig(
         visual_sidecar_query_enabled=True,
         visual_sidecar_query_topk=2,
+        visual_sidecar_fusion_enabled=True,
+        visual_sidecar_fusion_weight=2.0,
     )
     rag.varient = "standard"
     rag.gbc_index = SimpleNamespace(
@@ -690,7 +696,101 @@ def test_gbc_get_info_augments_tree_nodes_with_visual_sidecar_hits(tmp_path, mon
     retrieved_ids = [node["index_id"] for node in iter_context.retrieval_nodes]
     assert text_node.index_id in retrieved_ids
     assert image_node.index_id in retrieved_ids
+    assert rag.retriever.last_visual_rerank_res == [(image_node.index_id, 2.0)]
     assert iter_context.supplementary_ids == [image_node.index_id]
+
+
+def test_gbc_visual_sidecar_fusion_can_use_calibrated_score_modes_and_thresholds(monkeypatch):
+    fake_networkx = ModuleType("networkx")
+    fake_networkx.Graph = object
+    monkeypatch.setitem(sys.modules, "networkx", fake_networkx)
+
+    fake_rag_package = ModuleType("Core.rag")
+    fake_rag_package.__path__ = []
+    monkeypatch.setitem(sys.modules, "Core.rag", fake_rag_package)
+
+    fake_base_rag = ModuleType("Core.rag.base_rag")
+    fake_base_rag.BaseRAG = object
+    monkeypatch.setitem(sys.modules, "Core.rag.base_rag", fake_base_rag)
+
+    fake_llm = ModuleType("Core.provider.llm")
+    fake_llm.LLM = object
+    monkeypatch.setitem(sys.modules, "Core.provider.llm", fake_llm)
+
+    fake_vlm = ModuleType("Core.provider.vlm")
+    fake_vlm.VLM = object
+    monkeypatch.setitem(sys.modules, "Core.provider.vlm", fake_vlm)
+
+    fake_rerank = ModuleType("Core.provider.rerank")
+    fake_rerank.TextRerankerProvider = object
+    monkeypatch.setitem(sys.modules, "Core.provider.rerank", fake_rerank)
+
+    fake_gbc_index = ModuleType("Core.Index.GBCIndex")
+    fake_gbc_index.GBC = object
+    monkeypatch.setitem(sys.modules, "Core.Index.GBCIndex", fake_gbc_index)
+
+    fake_prompt = ModuleType("Core.prompts.gbc_prompt")
+    fake_prompt.LLM_EXPANSION_SELECT_PROMPT = ""
+    fake_prompt.QuestionEntity = object
+    fake_prompt.QuestionEntityExtraction = object
+    fake_prompt.QUESTION_ENT_PROMPT = ""
+    fake_prompt.QUESTION_ENTITY_TYPES = []
+    fake_prompt.SecEXPSelection = object
+    monkeypatch.setitem(sys.modules, "Core.prompts.gbc_prompt", fake_prompt)
+
+    fake_graph = ModuleType("Core.Index.Graph")
+    fake_graph.Entity = object
+    monkeypatch.setitem(sys.modules, "Core.Index.Graph", fake_graph)
+
+    fake_answer = ModuleType("Core.rag.gbc_answer")
+    fake_answer.AnswerAgent = object
+    monkeypatch.setitem(sys.modules, "Core.rag.gbc_answer", fake_answer)
+
+    fake_plan = ModuleType("Core.rag.gbc_plan")
+    fake_plan.TaskPlanner = object
+    fake_plan.PlanResult = object
+    monkeypatch.setitem(sys.modules, "Core.rag.gbc_plan", fake_plan)
+
+    fake_retrieval = ModuleType("Core.rag.gbc_retrieval")
+    fake_retrieval.Retriever = object
+    monkeypatch.setitem(sys.modules, "Core.rag.gbc_retrieval", fake_retrieval)
+
+    fake_utils = ModuleType("Core.rag.gbc_utils")
+    fake_utils.GBCRAGContext = object
+    fake_utils.SubStep = object
+    fake_utils.filter_tree_nodes = lambda *args, **kwargs: []
+    monkeypatch.setitem(sys.modules, "Core.rag.gbc_utils", fake_utils)
+
+    fake_ontology = ModuleType("Core.utils.ontology_utils")
+    fake_ontology.find_best_graph_ontology_node = lambda *args, **kwargs: None
+    fake_ontology.normalize_entity_name = lambda value: value
+    fake_ontology.normalize_entity_type = lambda value: value
+    monkeypatch.setitem(sys.modules, "Core.utils.ontology_utils", fake_ontology)
+
+    gbc_rag_path = Path(__file__).resolve().parents[1] / "Core" / "rag" / "gbc_rag.py"
+    spec = importlib.util.spec_from_file_location("_test_gbc_rag_calibration_module", gbc_rag_path)
+    gbc_rag_module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(gbc_rag_module)
+    GBCRAG = gbc_rag_module.GBCRAG
+
+    rag = GBCRAG.__new__(GBCRAG)
+    rag.cfg = GBCRAGConfig(
+        visual_sidecar_fusion_enabled=True,
+        visual_sidecar_fusion_weight=2.0,
+        visual_sidecar_fusion_score_mode="max_norm",
+        visual_sidecar_fusion_min_score=0.6,
+    )
+
+    visual_rerank_res = rag._build_visual_rerank_res(
+        [
+            {"node_id": 101, "score": 4.0},
+            {"node_id": 102, "score": 2.0},
+            {"node_id": 103, "score": 0.5},
+        ]
+    )
+
+    assert visual_rerank_res == [(101, 2.0)]
 
 
 def test_visual_sidecar_backend_colqwen2_local_reports_missing_runtime_dependencies(

@@ -210,6 +210,41 @@ Notable current API capabilities:
 - editable entity graph operations
 - `/health` endpoint with MongoDB and optional FalkorDB checks
 
+### Chat query visual sidecar overrides
+
+`POST /chat/query` accepts optional per-request visual-sidecar overrides. When a field is omitted or set to `null`, the server keeps the loaded `GBCRAGConfig` value from its config file.
+
+Current conservative fusion defaults are:
+
+- `visual_sidecar_fusion_score_mode: "max_norm"`
+- `visual_sidecar_fusion_min_score: 0.2`
+- visual querying and fusion still remain disabled unless enabled in config or per request
+
+Useful optional request fields:
+
+- `visual_sidecar_query_enabled`
+- `visual_sidecar_query_topk`
+- `visual_sidecar_fusion_enabled`
+- `visual_sidecar_fusion_weight`
+- `visual_sidecar_fusion_score_mode`
+- `visual_sidecar_fusion_min_score`
+
+Example request body:
+
+```json
+{
+  "query": "What does the revenue chart show?",
+  "doc_ids": ["doc-123"],
+  "cross_doc": false,
+  "visual_sidecar_query_enabled": true,
+  "visual_sidecar_query_topk": 5,
+  "visual_sidecar_fusion_enabled": true,
+  "visual_sidecar_fusion_weight": 1.25,
+  "visual_sidecar_fusion_score_mode": "max_norm",
+  "visual_sidecar_fusion_min_score": 0.2
+}
+```
+
 ## Ontology and cross-document resolution
 
 Ontology and entity-resolution support are real parts of the current codebase, but they are **not enabled by default**.

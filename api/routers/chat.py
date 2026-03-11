@@ -42,6 +42,12 @@ async def query(req: ChatQueryRequest, current_user: dict = Depends(rate_limit_q
         session_id=req.session_id,
         config_path=CONFIG_PATH,
         cross_doc=req.cross_doc,
+        visual_sidecar_query_enabled=req.visual_sidecar_query_enabled,
+        visual_sidecar_query_topk=req.visual_sidecar_query_topk,
+        visual_sidecar_fusion_enabled=req.visual_sidecar_fusion_enabled,
+        visual_sidecar_fusion_weight=req.visual_sidecar_fusion_weight,
+        visual_sidecar_fusion_score_mode=req.visual_sidecar_fusion_score_mode,
+        visual_sidecar_fusion_min_score=req.visual_sidecar_fusion_min_score,
     )
     return ChatQueryResponse(**result)
 

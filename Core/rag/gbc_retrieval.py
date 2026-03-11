@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import networkx as nx
 import logging
 
@@ -15,6 +15,29 @@ from Core.rag.gbc_utils import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _ordered_unique_ids(
+    seed_ids: Optional[List[int]] = None,
+    *ranked_lists: List[Tuple[int, float]],
+) -> List[int]:
+    ordered_ids: List[int] = []
+    seen_ids = set()
+
+    for node_id in seed_ids or []:
+        if node_id in seen_ids:
+            continue
+        ordered_ids.append(node_id)
+        seen_ids.add(node_id)
+
+    for ranked_list in ranked_lists:
+        for node_id, _ in ranked_list:
+            if node_id in seen_ids:
+                continue
+            ordered_ids.append(node_id)
+            seen_ids.add(node_id)
+
+    return ordered_ids
 
 
 class Retriever:
@@ -37,6 +60,34 @@ class Retriever:
         self.topk_ent: int = topk_ent
         self.x_percentile: int = x_percentile
         self.topk: int = topk
+
+    def _select_node_ids_from_rankers(
+        self,
+        *ranker_scores_lists: List[Tuple[int, float]],
+    ) -> List[int]:
+        valid_ranker_scores = [scores for scores in ranker_scores_lists if scores]
+        if not valid_ranker_scores:
+            return []
+
+        if len(valid_ranker_scores) == 1:
+            return [node_id for node_id, _ in valid_ranker_scores[0][: self.topk]]
+
+        merged_scores: Dict[int, List[float]] = merge_ranker_scores(*valid_ranker_scores)
+        sel_tree_nodes = calculate_skyline(merged_scores)
+        tree_node_ids = [node["node_id"] for node in sel_tree_nodes]
+
+        if len(tree_node_ids) < self.topk and len(merged_scores) >= self.topk:
+            log.info(
+                f"Skyline returned only {len(tree_node_ids)} nodes. "
+                f"Activating fallback to meet minimum of {self.topk}."
+            )
+            tree_node_ids = _ordered_unique_ids(
+                tree_node_ids,
+                *[scores[:5] for scores in valid_ranker_scores],
+            )
+            log.info(f"Fallback resulted in {len(tree_node_ids)} unique nodes.")
+
+        return tree_node_ids
 
     def text_reranker(
         self, subtree_nodes: List[TreeNode], query: str
@@ -178,6 +229,7 @@ class Retriever:
         subtree_nodes: List[TreeNode],
         subgraph: nx.Graph,
         start_ent_map: Dict[str, List[str]],
+        visual_rerank_res: Optional[List[Tuple[int, float]]] = None,
     ) -> Tuple[List[int], List[str]]:
         if len(subtree_nodes) == 0:
             log.info("No subtree nodes available for reranking.")
@@ -187,7 +239,10 @@ class Retriever:
             log.info("Variant 'wo_graph' selected: Skipping graph reranker.")
             # Only use text reranker
             text_rerank_res = self.text_reranker(subtree_nodes, sub_query)
-            tree_node_ids = [node_id for node_id, _ in text_rerank_res[: self.topk]]
+            tree_node_ids = self._select_node_ids_from_rankers(
+                text_rerank_res,
+                visual_rerank_res or [],
+            )
 
             # use start_ent_map as the returned entities
             res_entities = set()
@@ -204,7 +259,10 @@ class Retriever:
             graph_rerank_res, res_entities = self.graph_reranker(
                 subgraph, start_ent_map, subtree_nodes
             )
-            tree_node_ids = [node_id for node_id, _ in graph_rerank_res[: self.topk]]
+            tree_node_ids = self._select_node_ids_from_rankers(
+                graph_rerank_res,
+                visual_rerank_res or [],
+            )
 
             return tree_node_ids, res_entities
 
@@ -220,9 +278,6 @@ class Retriever:
                 f"Graph reranker returned only {len(graph_rerank_res)} nodes, "
                 f"which is less than topk={self.topk}."
             )
-            tree_node_ids = [node_id for node_id, _ in graph_rerank_res]
-            return tree_node_ids, res_entities
-        
 
         # 2.2 Rerank with text reranker model.
         text_rerank_res = self.text_reranker(subtree_nodes, sub_query)
@@ -235,42 +290,10 @@ class Retriever:
         #     graph_rerank_res, text_rerank_res, mm_rerank_res
         # )
 
-        merged_scores: Dict[int, List[float]] = merge_ranker_scores(
-            graph_rerank_res, text_rerank_res
+        tree_node_ids = self._select_node_ids_from_rankers(
+            graph_rerank_res,
+            text_rerank_res,
+            visual_rerank_res or [],
         )
-        sel_tree_nodes = calculate_skyline(merged_scores)
-        tree_node_ids = [node["node_id"] for node in sel_tree_nodes]
-
-        if (
-            len(tree_node_ids) < self.topk
-            and len(merged_scores) >= self.topk
-        ):
-            log.info(
-                f"Skyline returned only {len(tree_node_ids)} nodes. "
-                f"Activating fallback to meet minimum of {self.topk}."
-            )
-
-            # --- MODIFICATION START ---
-
-            # 1. Get IDs from the initial skyline result
-            final_node_ids = set(tree_node_ids)
-
-            # 2. Get top 5 from graph reranker
-            # Assuming the score is the first value in the list, sort descending
-            top_5_graph = graph_rerank_res[:5]
-            for node_id, _ in top_5_graph:
-                final_node_ids.add(node_id)
-
-            # 3. Get top 5 from text reranker
-            top_5_text = text_rerank_res[:5]
-            for node_id, _ in top_5_text:
-                final_node_ids.add(node_id)
-
-            # 4. Rebuild the sel_tree_nodes list from the unique IDs
-            # Create a quick lookup map for subtree_nodes by their ID
-            tree_node_ids = list(final_node_ids)
-
-            log.info(f"Fallback resulted in {len(tree_node_ids)} unique nodes.")
-            # --- MODIFICATION END ---
 
         return tree_node_ids, res_entities

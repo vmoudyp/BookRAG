@@ -73,6 +73,12 @@ rag:
   sim_threshold: 0.3
   select_depth: 2
   max_retry: 2
+  visual_sidecar_query_enabled: false
+  visual_sidecar_query_topk: 3
+  visual_sidecar_fusion_enabled: false
+  visual_sidecar_fusion_weight: 1.0
+  visual_sidecar_fusion_score_mode: max_norm
+  visual_sidecar_fusion_min_score: 0.2
   reranker_config:
     model_name: TODO
     max_length: TODO

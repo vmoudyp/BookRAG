@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import uuid
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import List, Optional
 
 from api.db import mongodb as db
@@ -196,8 +196,52 @@ def _rewrite_query_sync(query: str, history: List[dict], config_path: str) -> st
     return query
 
 
+def _build_chat_gbc_rag_config(
+    config_path: str,
+    *,
+    visual_sidecar_query_enabled: Optional[bool] = None,
+    visual_sidecar_query_topk: Optional[int] = None,
+    visual_sidecar_fusion_enabled: Optional[bool] = None,
+    visual_sidecar_fusion_weight: Optional[float] = None,
+    visual_sidecar_fusion_score_mode: Optional[str] = None,
+    visual_sidecar_fusion_min_score: Optional[float] = None,
+):
+    from Core.configs.rag.gbc_config import GBCRAGConfig
+
+    cfg = _get_system_config(config_path)
+    strategy_cfg = getattr(getattr(cfg, "rag", None), "strategy_config", None)
+    if not isinstance(strategy_cfg, GBCRAGConfig):
+        raise ValueError("Chat service requires a GBC RAG strategy configuration")
+
+    rag_cfg = strategy_cfg.model_copy(deep=True)
+    overrides = {
+        "visual_sidecar_query_enabled": visual_sidecar_query_enabled,
+        "visual_sidecar_query_topk": visual_sidecar_query_topk,
+        "visual_sidecar_fusion_enabled": visual_sidecar_fusion_enabled,
+        "visual_sidecar_fusion_weight": visual_sidecar_fusion_weight,
+        "visual_sidecar_fusion_score_mode": visual_sidecar_fusion_score_mode,
+        "visual_sidecar_fusion_min_score": visual_sidecar_fusion_min_score,
+    }
+    for field_name, value in overrides.items():
+        if value is not None:
+            setattr(rag_cfg, field_name, value)
+
+    return rag_cfg
+
+
 def _query_single_doc_sync(
-    query: str, tenant_id: str, doc_id: str, config_path: str, lang: str = "en"
+    query: str,
+    tenant_id: str,
+    doc_id: str,
+    config_path: str,
+    lang: str = "en",
+    *,
+    visual_sidecar_query_enabled: Optional[bool] = None,
+    visual_sidecar_query_topk: Optional[int] = None,
+    visual_sidecar_fusion_enabled: Optional[bool] = None,
+    visual_sidecar_fusion_weight: Optional[float] = None,
+    visual_sidecar_fusion_score_mode: Optional[str] = None,
+    visual_sidecar_fusion_min_score: Optional[float] = None,
 ) -> str:
     """Run GBC RAG query against a single document (sync, for thread pool).
 
@@ -205,14 +249,21 @@ def _query_single_doc_sync(
     history is present (see :func:`_rewrite_query_sync`).
     """
     from Core.rag.gbc_rag import GBCRAG
-    from Core.configs.rag.gbc_config import GBCRAGConfig
 
     gbc_index = _get_gbc_index(tenant_id, doc_id, config_path)
     llm = _get_llm(config_path)
     vlm = _get_vlm(config_path)
-    rag_cfg = GBCRAGConfig()
+    rag_cfg = _build_chat_gbc_rag_config(
+        config_path,
+        visual_sidecar_query_enabled=visual_sidecar_query_enabled,
+        visual_sidecar_query_topk=visual_sidecar_query_topk,
+        visual_sidecar_fusion_enabled=visual_sidecar_fusion_enabled,
+        visual_sidecar_fusion_weight=visual_sidecar_fusion_weight,
+        visual_sidecar_fusion_score_mode=visual_sidecar_fusion_score_mode,
+        visual_sidecar_fusion_min_score=visual_sidecar_fusion_min_score,
+    )
     rag = GBCRAG(llm=llm, vlm=vlm, config=rag_cfg, gbc_index=gbc_index, lang=lang)
-    result = rag.get_GBC_info(query)
+    result = rag.answer_query(query)
     return result if isinstance(result, str) else str(result)
 
 
@@ -224,6 +275,12 @@ async def handle_query(
     session_id: Optional[str],
     config_path: str,
     cross_doc: bool = False,
+    visual_sidecar_query_enabled: Optional[bool] = None,
+    visual_sidecar_query_topk: Optional[int] = None,
+    visual_sidecar_fusion_enabled: Optional[bool] = None,
+    visual_sidecar_fusion_weight: Optional[float] = None,
+    visual_sidecar_fusion_score_mode: Optional[str] = None,
+    visual_sidecar_fusion_min_score: Optional[float] = None,
 ) -> dict:
     """Route query to appropriate retrieval mode and store in session.
 
@@ -288,14 +345,30 @@ async def handle_query(
     except Exception:
         pass  # Non-fatal: metadata is best-effort
 
+    query_overrides = {
+        "visual_sidecar_query_enabled": visual_sidecar_query_enabled,
+        "visual_sidecar_query_topk": visual_sidecar_query_topk,
+        "visual_sidecar_fusion_enabled": visual_sidecar_fusion_enabled,
+        "visual_sidecar_fusion_weight": visual_sidecar_fusion_weight,
+        "visual_sidecar_fusion_score_mode": visual_sidecar_fusion_score_mode,
+        "visual_sidecar_fusion_min_score": visual_sidecar_fusion_min_score,
+    }
+
     if cross_doc or len(doc_ids) > 1:
         # Parallel per-doc queries, answers synthesised into one response
         target_docs = doc_ids[:5]   # cap to avoid GPU overload
         answers = await asyncio.gather(*[
             loop.run_in_executor(
-                _executor, _query_single_doc_sync,
-                effective_query, tenant_id, did, config_path,
-                doc_langs.get(did, "en"),
+                _executor,
+                partial(
+                    _query_single_doc_sync,
+                    effective_query,
+                    tenant_id,
+                    did,
+                    config_path,
+                    doc_langs.get(did, "en"),
+                    **query_overrides,
+                ),
             )
             for did in target_docs
         ])
@@ -332,8 +405,16 @@ async def handle_query(
         else:
             lang = doc_langs.get(doc_id, "en")
             answer = await loop.run_in_executor(
-                _executor, _query_single_doc_sync,
-                effective_query, tenant_id, doc_id, config_path, lang,
+                _executor,
+                partial(
+                    _query_single_doc_sync,
+                    effective_query,
+                    tenant_id,
+                    doc_id,
+                    config_path,
+                    lang,
+                    **query_overrides,
+                ),
             )
 
     # ── Persist assistant message ──────────────────────────────────────────────

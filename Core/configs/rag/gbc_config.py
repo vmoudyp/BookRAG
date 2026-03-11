@@ -48,11 +48,33 @@ class GBCRAGConfig(BaseRAGStrategyConfig):
     )
     visual_sidecar_query_enabled: bool = Field(
         default=False,
-        description="Enable conservative query-time augmentation from visual sidecar artifacts.",
+        description="Enable query-time visual sidecar retrieval and conservative post-skyline augmentation.",
     )
     visual_sidecar_query_topk: int = Field(
         default=3,
-        description="Maximum number of visual sidecar node IDs to append after skyline retrieval.",
+        description="Maximum number of visual sidecar hits to retrieve for fusion and/or augmentation.",
+    )
+    visual_sidecar_fusion_enabled: bool = Field(
+        default=False,
+        description="Allow visual sidecar scores to participate in skyline ranking as an additional score dimension.",
+    )
+    visual_sidecar_fusion_weight: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Multiplier applied to visual sidecar scores before skyline fusion.",
+    )
+    visual_sidecar_fusion_score_mode: Literal["raw", "max_norm", "rank"] = Field(
+        default="max_norm",
+        description=(
+            "Calibration applied to visual sidecar scores before fusion weight is applied. "
+            "'raw' preserves backend scores, 'max_norm' scales the strongest hit to 1.0, "
+            "and 'rank' uses reciprocal-rank style scores."
+        ),
+    )
+    visual_sidecar_fusion_min_score: float = Field(
+        default=0.2,
+        ge=0.0,
+        description="Minimum calibrated visual score required for a hit to participate in skyline fusion.",
     )
     reranker_config: RerankerConfig = Field(
         default_factory=RerankerConfig,

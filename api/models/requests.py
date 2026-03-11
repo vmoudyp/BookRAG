@@ -1,6 +1,6 @@
 """Pydantic request and response models for the BookRAG API."""
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 # ── Reusable length constraints ──────────────────────────────────────────────
@@ -97,6 +97,33 @@ class ChatQueryRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, max_length=_SHORT_STR, description="Existing session ID for history-aware queries")
     doc_ids: Optional[List[str]] = Field(default=None, description="Restrict to specific docs; None = all accessible")
     cross_doc: bool = Field(default=False, description="Use cross-document retrieval mode")
+    visual_sidecar_query_enabled: Optional[bool] = Field(
+        default=None,
+        description="Optional chat-time override for query-time visual sidecar retrieval.",
+    )
+    visual_sidecar_query_topk: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Optional chat-time override for how many visual sidecar hits to consider.",
+    )
+    visual_sidecar_fusion_enabled: Optional[bool] = Field(
+        default=None,
+        description="Optional chat-time override for including visual sidecar scores in skyline fusion.",
+    )
+    visual_sidecar_fusion_weight: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional chat-time override for the visual sidecar fusion weight.",
+    )
+    visual_sidecar_fusion_score_mode: Optional[Literal["raw", "max_norm", "rank"]] = Field(
+        default=None,
+        description="Optional chat-time override for visual score calibration before skyline fusion.",
+    )
+    visual_sidecar_fusion_min_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional chat-time override for the minimum calibrated visual score used in fusion.",
+    )
 
 
 class ChatQueryResponse(BaseModel):
