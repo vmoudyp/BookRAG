@@ -4,24 +4,81 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from Core.provider.embedding import (
-    TextEmbeddingProvider,
-    GmeEmbeddingProvider,
-)
-from Core.provider.llm import LLM
-from Core.provider.vdb import VectorStore
 from Core.Index.Tree import DocumentTree, NodeType
 from Core.configs.vdb_config import VDBConfig
 from Core.configs.system_config import SystemConfig
-from Core.utils.utils import TextProcessor
-from Core.utils.raptor_utils import raptor_tree
-from Core.utils.bm25 import BM25
 import json
 import logging
 
 log = logging.getLogger(__name__)
 
 save_path = "/home/wangshu/multimodal/GBC-RAG/test/sf/"
+
+
+def _join_text_parts(*parts) -> str:
+    normalized_parts = []
+    seen = set()
+    for part in parts:
+        if part is None:
+            continue
+        text = str(part).strip()
+        if not text or text in seen:
+            continue
+        normalized_parts.append(text)
+        seen.add(text)
+    return " ".join(normalized_parts)
+
+
+def build_node_retrieval_metadata(node) -> Dict[str, object]:
+    return {
+        "node_id": node.index_id,
+        "pdf_id": node.meta_info.pdf_id,
+        "source_type": node.meta_info.source_type,
+        "source_role": node.meta_info.source_role,
+    }
+
+
+def get_text_surrogate(node) -> str:
+    if node.type == NodeType.IMAGE:
+        return _join_text_parts(node.meta_info.caption, node.meta_info.footnote, node.meta_info.content)
+    if node.type == NodeType.TABLE:
+        return _join_text_parts(
+            node.meta_info.content,
+            node.meta_info.caption,
+            node.meta_info.footnote,
+            node.meta_info.table_body,
+        )
+    if node.type in {NodeType.TEXT, NodeType.TITLE, NodeType.EQUATION}:
+        return _join_text_parts(node.meta_info.content)
+    return ""
+
+
+def has_local_visual_asset(node) -> bool:
+    image_path = getattr(node.meta_info, "img_path", None)
+    return bool(image_path and os.path.exists(image_path))
+
+
+def is_visual_leaf_candidate(node) -> bool:
+    return node.type in {NodeType.IMAGE, NodeType.TABLE} and not node.children and has_local_visual_asset(node)
+
+
+def select_visual_leaf_candidates(tree: DocumentTree) -> List[Dict[str, object]]:
+    candidates = []
+    for node in tree.nodes:
+        if node == tree.root_node or not is_visual_leaf_candidate(node):
+            continue
+        candidates.append(
+            {
+                "node_id": node.index_id,
+                "pdf_id": node.meta_info.pdf_id,
+                "node_type": node.type.value,
+                "img_path": node.meta_info.img_path,
+                "text_surrogate": get_text_surrogate(node),
+                "source_type": node.meta_info.source_type,
+                "source_role": node.meta_info.source_role,
+            }
+        )
+    return candidates
 
 
 def process_tree_nodes(tree: DocumentTree) -> Tuple[Dict[str, List], Dict[str, List]]:
@@ -34,45 +91,16 @@ def process_tree_nodes(tree: DocumentTree) -> Tuple[Dict[str, List], Dict[str, L
         if node == tree.root_node:
             continue
 
-        node_type = node.type
-        meta_data = {
-            "node_id": node.index_id,
-            "pdf_id": node.meta_info.pdf_id,
-        }
-
-        if node_type == NodeType.IMAGE:
-            image_path = node.meta_info.img_path
-            image_str = node.meta_info.caption + node.meta_info.footnote
-            text_list.append(image_str)
+        meta_data = build_node_retrieval_metadata(node)
+        text_content = get_text_surrogate(node)
+        if text_content:
+            text_list.append(text_content)
             text_meta_data.append(meta_data)
 
-            # Check if the image path exists before adding it
-            if image_path and os.path.exists(image_path):
-                image_list.append(image_path)
-                image_meta_data.append(meta_data)
-                image_str_list.append(image_str)
-        elif node_type == NodeType.TABLE:
-            table_str = node.meta_info.content
-            table_body = node.meta_info.table_body
-            if table_body:
-                table_str += table_body
-            text_list.append(table_str)
-            text_meta_data.append(meta_data)
-
-            table_img = node.meta_info.img_path
-            if table_img and os.path.exists(table_img):
-                image_list.append(table_img)
-                image_meta_data.append(meta_data)
-                image_str_list.append(table_str)
-        elif (
-            node_type == NodeType.TEXT
-            or node_type == NodeType.TITLE
-            or node_type == NodeType.EQUATION
-        ):
-            text_content = node.meta_info.content
-            if text_content:
-                text_list.append(text_content)
-                text_meta_data.append(meta_data)
+        if node.type in {NodeType.IMAGE, NodeType.TABLE} and has_local_visual_asset(node):
+            image_list.append(node.meta_info.img_path)
+            image_meta_data.append(meta_data)
+            image_str_list.append(text_content)
 
     text_dict = {"text": text_list, "meta": text_meta_data}
     image_dict = {
@@ -84,6 +112,9 @@ def process_tree_nodes(tree: DocumentTree) -> Tuple[Dict[str, List], Dict[str, L
 
 
 def build_vdb_index(tree: DocumentTree, vdb_cfg: VDBConfig):
+    from Core.provider.embedding import TextEmbeddingProvider, GmeEmbeddingProvider
+    from Core.provider.vdb import VectorStore
+
     if vdb_cfg.mm_embedding:
         embedder = GmeEmbeddingProvider(
             model_name=vdb_cfg.embedding_config.model_name,
@@ -137,6 +168,11 @@ def get_input_text(cfg: SystemConfig) -> str:
 
 
 def get_all_chunks(cfg: SystemConfig):
+    from Core.provider.embedding import TextEmbeddingProvider
+    from Core.provider.llm import LLM
+    from Core.utils.utils import TextProcessor
+    from Core.utils.raptor_utils import raptor_tree
+
     corpus_text = get_input_text(cfg)
     chunks = TextProcessor.split_text_into_chunks(text=corpus_text, max_length=500)
 
@@ -161,6 +197,10 @@ def get_all_chunks(cfg: SystemConfig):
 
 
 def build_other_vdb_index(cfg: SystemConfig):
+    from Core.provider.embedding import TextEmbeddingProvider
+    from Core.provider.vdb import VectorStore
+    from Core.utils.bm25 import BM25
+
     vdb_dir = os.path.join(cfg.save_path, cfg.vdb.vdb_dir_name)
     if os.path.exists(vdb_dir) and not cfg.vdb.force_rebuild:
         if cfg.vdb.force_rebuild:
@@ -222,6 +262,8 @@ def load_pdf_lists_from_dir(save_dir):
 
 
 def compute_mm_embedding(cfg: SystemConfig, tree_index: DocumentTree):
+    from Core.provider.embedding import GmeEmbeddingProvider
+
     embedder_cfg = cfg.vdb.embedding_config
     embedder = GmeEmbeddingProvider(
         model_name=embedder_cfg.model_name,
@@ -333,6 +375,8 @@ def compute_mm_embedding(cfg: SystemConfig, tree_index: DocumentTree):
 
 
 def compute_mm_embedding_question(cfg: SystemConfig, group: pd.DataFrame):
+    from Core.provider.embedding import GmeEmbeddingProvider
+
     embedder_cfg = cfg.vdb.embedding_config
     embedder = GmeEmbeddingProvider(
         model_name=embedder_cfg.model_name,

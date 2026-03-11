@@ -1,19 +1,39 @@
-from typing import Optional, List, Dict
+from __future__ import annotations
 
-from Core.provider.llm import LLM
+from typing import Optional, List, Dict, TYPE_CHECKING
+
 from Core.prompts.refiner_prompt import (
     TABLE_MERGE_PROMPT,
     MergeJudgmentsResponse,
     TEXT_MERGE_PROMPT,
     StitchingJudgmentsResponse,
 )
-from Core.utils.utils import num_tokens, get_json_content, enumerate_pdf_list
 import json
 import re
 import logging
-from bs4 import BeautifulSoup
+
+if TYPE_CHECKING:
+    from Core.provider.llm import LLM
 
 log = logging.getLogger(__name__)
+
+
+def num_tokens(*args, **kwargs):
+    from Core.utils.utils import num_tokens as _num_tokens
+
+    return _num_tokens(*args, **kwargs)
+
+
+def get_json_content(*args, **kwargs):
+    from Core.utils.utils import get_json_content as _get_json_content
+
+    return _get_json_content(*args, **kwargs)
+
+
+def enumerate_pdf_list(*args, **kwargs):
+    from Core.utils.utils import enumerate_pdf_list as _enumerate_pdf_list
+
+    return _enumerate_pdf_list(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +441,8 @@ def get_table_col_count(table_html: str) -> int:
     :param table_html: HTML string of the table
     :return: maximum number of columns in the table
     """
+    from bs4 import BeautifulSoup
+
     soup = BeautifulSoup(table_html, "html.parser")
     max_cols = 0
     for row in soup.find_all("tr"):
@@ -483,6 +505,8 @@ def merge_tables_and_mark_invalid(prev_content: dict, cur_content: dict):
     :param prev_content: Previous table content (to be merged into)
     :param cur_content: Current table content (to be merged)
     """
+    from bs4 import BeautifulSoup
+
     prev_html = prev_content.get("table_body", "")
     cur_html = cur_content.get("table_body", "")
     if not prev_html or not cur_html:

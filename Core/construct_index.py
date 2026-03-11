@@ -9,7 +9,7 @@ log = logging.getLogger(__name__)
 
 from Core.Index.GBCIndex import GBC
 from Core.configs.system_config import SystemConfig
-from Core.pipelines.doc_tree_builder import build_tree_from_pdf
+from Core.pipelines.doc_tree_builder import build_tree_from_source
 from Core.pipelines.kg_builder import build_knowledge_graph
 from Core.pipelines.vdb_index import (
     build_other_vdb_index,
@@ -38,7 +38,7 @@ def construct_gbc_index(cfg: SystemConfig, tree_only: bool = False):
 
     # --- Measure Tree Building ---
     tree_start_time = time.time()
-    tree_index = build_tree_from_pdf(cfg)
+    tree_index = build_tree_from_source(cfg)
     tree_duration = time.time() - tree_start_time
     log.info(f"Document tree constructed in {tree_duration:.2f} seconds.")
     current_run_stats["build_tree_time"] = round(tree_duration, 2)
@@ -95,7 +95,7 @@ def construct_vdb(cfg: SystemConfig):
     current_run_stats = {}
 
     tree_start_time = time.time()
-    tree_index = build_tree_from_pdf(cfg)
+    tree_index = build_tree_from_source(cfg)
     tree_duration = time.time() - tree_start_time
     log.info(f"Document tree constructed in {tree_duration:.2f} seconds.")
     current_run_stats["build_tree_time"] = round(tree_duration, 2)
@@ -140,7 +140,7 @@ def construct_vdb(cfg: SystemConfig):
 
 def compute_mm_reranker(cfg: SystemConfig, group: pd.DataFrame):
 
-    tree_index = build_tree_from_pdf(cfg)
+    tree_index = build_tree_from_source(cfg)
 
     compute_mm_embedding(cfg, tree_index)
 

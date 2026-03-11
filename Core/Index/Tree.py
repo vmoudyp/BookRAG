@@ -70,6 +70,24 @@ class MetaInfo(BaseModel):
         description="the level of the title, 0 is the root", default=-1
     )
 
+    # unified source metadata
+    source_type: str | None = Field(
+        description="canonical source type for the node, e.g. pdf or html_json",
+        default=None,
+    )
+    source_role: str | None = Field(
+        description="normalized semantic role of the source block, e.g. title, body_text, image, table",
+        default=None,
+    )
+    source_path: str | None = Field(
+        description="path to the original normalized source payload or source document",
+        default=None,
+    )
+    provenance: dict | None = Field(
+        description="arbitrary provenance/debug metadata preserved from source normalization",
+        default_factory=dict,
+    )
+
 
 class TreeNode:
     def __init__(self, meta_dict: dict = None):

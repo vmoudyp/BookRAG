@@ -51,6 +51,18 @@ class SystemConfig(BaseModel):
     # Paths
     pdf_path: Optional[str] = "/home/wangshu/multimodal/GBC-RAG/test/double_paper.pdf"
     save_path: Optional[str] = "/home/wangshu/multimodal/GBC-RAG/test/tree_index"
+    source_type: Optional[str] = Field(
+        default="pdf",
+        description="Canonical source type for tree construction. Supported: pdf, html_json.",
+    )
+    source_path: Optional[str] = Field(
+        default=None,
+        description="Generic source path used by the unified source dispatcher.",
+    )
+    html_json_path: Optional[str] = Field(
+        default=None,
+        description="Path to a preprocessed HTML JSON payload that should be normalized into DocumentTree.",
+    )
 
     # Multi-tenant identifiers (optional for backward compatibility)
     tenant_id: Optional[str] = None

@@ -13,6 +13,8 @@ def create_node_by_type(pdf_content: Optional[str], isTitle: bool) -> TreeNode:
             "pdf_id": pdf_content.get("pdf_id", -1),
             "page_idx": pdf_content.get("page_idx", -1),
             "pdf_para_block": pdf_content.get("middle_json", {}),
+            "source_type": "pdf",
+            "source_role": "title" if isTitle else "body_text",
         }
         if isTitle:
             level = pdf_content.get("text_level", -1)
@@ -42,6 +44,8 @@ def create_node_by_type(pdf_content: Optional[str], isTitle: bool) -> TreeNode:
             "pdf_id": pdf_content.get("pdf_id", -1),
             "page_idx": pdf_content.get("page_idx", -1),
             "pdf_para_block": pdf_content.get("middle_json", {}),
+            "source_type": "pdf",
+            "source_role": "image",
         }
         node = TreeNode(node_meta)
         node.type = NodeType.IMAGE
@@ -60,6 +64,8 @@ def create_node_by_type(pdf_content: Optional[str], isTitle: bool) -> TreeNode:
             "pdf_id": pdf_content.get("pdf_id", -1),
             "page_idx": pdf_content.get("page_idx", -1),
             "pdf_para_block": pdf_content.get("middle_json", {}),
+            "source_type": "pdf",
+            "source_role": "table",
         }
         node = TreeNode(node_meta)
         node.type = NodeType.TABLE
@@ -70,6 +76,8 @@ def create_node_by_type(pdf_content: Optional[str], isTitle: bool) -> TreeNode:
             "page_idx": pdf_content.get("page_idx", -1),
             "pdf_para_block": pdf_content.get("middle_json", {}),
             "text_format": pdf_content.get("text_format", ""),
+            "source_type": "pdf",
+            "source_role": "equation",
         }
         node = TreeNode(node_meta)
         node.type = NodeType.EQUATION
@@ -80,6 +88,8 @@ def create_node_by_type(pdf_content: Optional[str], isTitle: bool) -> TreeNode:
             "pdf_id": pdf_content.get("pdf_id", -1),
             "page_idx": pdf_content.get("page_idx", -1),
             "pdf_para_block": pdf_content.get("middle_json", {}),
+            "source_type": "pdf",
+            "source_role": "body_text",
         }
         node = TreeNode(node_meta)
         node.type = NodeType.TEXT

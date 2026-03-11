@@ -15,7 +15,7 @@ def _build_index_sync(
     pdf_path: str, save_path: str, tenant_id: str, doc_id: str,
     config_path: str, document_date=None, document_lang=None,
 ):
-    """Synchronous index build — runs in a thread pool."""
+    """Synchronous index build for the current parser-backed flow."""
     from Core.configs.system_config import load_system_config
     from Core.configs.falkordb_config import FalkorDBConfig
     from Core.construct_index import construct_gbc_index
@@ -23,6 +23,8 @@ def _build_index_sync(
     cfg = load_system_config(config_path)
     cfg.pdf_path = pdf_path
     cfg.save_path = save_path
+    cfg.source_type = "pdf"
+    cfg.source_path = pdf_path
     cfg.tenant_id = tenant_id
     cfg.doc_id = doc_id
     # Propagate document_date into the config for temporal awareness
