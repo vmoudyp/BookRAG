@@ -5,7 +5,11 @@ import yaml
 from Core.Index.Tree import NodeType
 from Core.configs.system_config import load_system_config
 from Core.pipelines.doc_tree_builder import build_tree_from_source
-from Core.pipelines.vdb_index import process_tree_nodes, select_visual_leaf_candidates
+from Core.pipelines.vdb_index import (
+    build_visual_sidecar_stub,
+    process_tree_nodes,
+    select_visual_leaf_candidates,
+)
 
 
 def _build_test_cfg(tmp_path, html_json_path):
@@ -110,3 +114,54 @@ def test_visual_leaf_candidate_selection_uses_local_assets_and_text_surrogates(t
     assert len(candidates) == 2
     assert {candidate["node_type"] for candidate in candidates} == {"image", "table"}
     assert all(candidate["img_path"] == str(shared_image_path) for candidate in candidates)
+
+
+def test_visual_sidecar_stub_writes_manifest_and_candidate_metadata(tmp_path):
+    image_path = tmp_path / "sidecar.png"
+    image_path.write_bytes(b"visual-sidecar")
+
+    payload = {
+        "title": "Sidecar Doc",
+        "sections": [
+            {
+                "title": "Evidence",
+                "images": [
+                    {"img_path": str(image_path), "caption": "Figure S", "footnote": "Support"}
+                ],
+                "tables": [
+                    {"img_path": str(image_path), "caption": "Table S", "table_body": "L | R"}
+                ],
+            }
+        ],
+    }
+    html_json_path = tmp_path / "sidecar-doc.json"
+    html_json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    cfg = _build_test_cfg(tmp_path, html_json_path)
+    cfg.tenant_id = "tenant-a"
+    cfg.doc_id = "doc-a"
+    tree = build_tree_from_source(cfg, reforce=True)
+
+    manifest = build_visual_sidecar_stub(
+        tree,
+        save_path=cfg.save_path,
+        tenant_id=cfg.tenant_id,
+        doc_id=cfg.doc_id,
+    )
+
+    sidecar_dir = tmp_path / "index" / "visual_leaf_sidecar"
+    manifest_path = sidecar_dir / "manifest.json"
+    candidates_path = sidecar_dir / "candidates.json"
+
+    assert manifest_path.exists()
+    assert candidates_path.exists()
+    assert manifest["status"] == "stub_only"
+    assert manifest["candidate_count"] == 2
+
+    candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
+    assert {candidate["node_type"] for candidate in candidates} == {"image", "table"}
+    assert all(candidate["tenant_id"] == "tenant-a" for candidate in candidates)
+    assert all(candidate["doc_id"] == "doc-a" for candidate in candidates)
+    assert all(candidate["path_from_root_ids"][-1] == candidate["node_id"] for candidate in candidates)
+    assert all(candidate["nearest_title_ancestor_id"] is not None for candidate in candidates)
+    assert all(candidate["retriever_family"] == "colqwen2" for candidate in candidates)

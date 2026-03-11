@@ -14,6 +14,7 @@ from Core.pipelines.kg_builder import build_knowledge_graph
 from Core.pipelines.vdb_index import (
     build_other_vdb_index,
     build_vdb_index,
+    build_visual_sidecar_stub,
     compute_mm_embedding,
     compute_mm_embedding_question,
 )
@@ -136,6 +137,35 @@ def construct_vdb(cfg: SystemConfig):
 
     # Save all collected stats and exit
     save_indexing_stats(save_path=cfg.save_path, new_stats=current_run_stats)
+
+
+def construct_visual_sidecar_stub(cfg: SystemConfig):
+    token_tracker = TokenTracker.get_instance()
+    token_tracker.reset()
+
+    log.info("Starting visual sidecar stub construction...")
+    current_run_stats = {}
+
+    tree_start_time = time.time()
+    tree_index = build_tree_from_source(cfg)
+    tree_duration = time.time() - tree_start_time
+    log.info(f"Document tree constructed in {tree_duration:.2f} seconds.")
+    current_run_stats["build_tree_time"] = round(tree_duration, 2)
+
+    sidecar_start_time = time.time()
+    manifest = build_visual_sidecar_stub(
+        tree_index,
+        save_path=cfg.save_path,
+        tenant_id=cfg.tenant_id,
+        doc_id=cfg.doc_id,
+    )
+    sidecar_duration = time.time() - sidecar_start_time
+    log.info(f"Visual sidecar stub constructed in {sidecar_duration:.2f} seconds.")
+    current_run_stats["build_visual_sidecar_stub_time"] = round(sidecar_duration, 2)
+
+    current_run_stats["token_stage_history"] = token_tracker.stage_history
+    save_indexing_stats(save_path=cfg.save_path, new_stats=current_run_stats)
+    return manifest
 
 
 def compute_mm_reranker(cfg: SystemConfig, group: pd.DataFrame):

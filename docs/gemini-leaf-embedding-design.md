@@ -191,6 +191,10 @@ The current implementation work for this branch should stop at the safe integrat
 - add HTML JSON normalization into `DocumentTree`
 - preserve current parser-backed tree/KG/VDB behavior
 - expose visual-leaf candidate selection hooks for a future sidecar retriever
+- write a stub sidecar artifact under `save_path/visual_leaf_sidecar/` containing:
+  - `manifest.json`
+  - `candidates.json`
+  - per-leaf structural/source metadata for future ColQwen2 / ColPali indexing
 
 The actual ColQwen2 / ColPali runtime backend remains a separate follow-up task.
 

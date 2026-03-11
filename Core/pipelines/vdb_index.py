@@ -1,6 +1,7 @@
 import os
 from typing import Dict, List, Tuple
 from pathlib import Path
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 
@@ -79,6 +80,131 @@ def select_visual_leaf_candidates(tree: DocumentTree) -> List[Dict[str, object]]
             }
         )
     return candidates
+
+
+def _utc_now_isoformat() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _get_nearest_title_ancestor_id(node) -> int | None:
+    current = node.parent
+    while current is not None:
+        if current.type == NodeType.TITLE:
+            return current.index_id
+        current = current.parent
+    return None
+
+
+def build_visual_sidecar_candidate_records(
+    tree: DocumentTree,
+    tenant_id: str | None = None,
+    doc_id: str | None = None,
+    retriever_family: str = "colqwen2",
+    retriever_model: str = "stub",
+    retriever_version: str = "stub_v1",
+) -> List[Dict[str, object]]:
+    records: List[Dict[str, object]] = []
+
+    for candidate in select_visual_leaf_candidates(tree):
+        node = tree.get_node_by_index_id(candidate["node_id"])
+        if node is None:
+            continue
+
+        path_nodes = tree.get_path_from_root(node.index_id)
+        meta = node.meta_info
+        records.append(
+            {
+                "node_id": node.index_id,
+                "parent_id": node.parent.index_id if node.parent else None,
+                "pdf_id": meta.pdf_id,
+                "doc_id": doc_id,
+                "tenant_id": tenant_id,
+                "node_type": node.type.value,
+                "depth": node.depth,
+                "path_from_root_ids": [path_node.index_id for path_node in path_nodes],
+                "nearest_title_ancestor_id": _get_nearest_title_ancestor_id(node),
+                "page_idx": meta.page_idx,
+                "page_path": meta.page_path,
+                "file_name": meta.file_name,
+                "file_path": meta.file_path,
+                "source_type": meta.source_type,
+                "source_role": meta.source_role,
+                "source_path": meta.source_path,
+                "img_path": meta.img_path,
+                "asset_source": "table_image" if node.type == NodeType.TABLE else "leaf_image",
+                "caption": meta.caption,
+                "footnote": meta.footnote,
+                "table_body": meta.table_body,
+                "content": meta.content,
+                "text_surrogate": get_text_surrogate(node),
+                "provenance": meta.provenance or {},
+                "retriever_family": retriever_family,
+                "retriever_model": retriever_model,
+                "retriever_version": retriever_version,
+                "created_at": _utc_now_isoformat(),
+            }
+        )
+
+    return records
+
+
+def build_visual_sidecar_stub(
+    tree: DocumentTree,
+    save_path: str,
+    *,
+    tenant_id: str | None = None,
+    doc_id: str | None = None,
+    index_name: str = "visual_leaf_sidecar",
+    retriever_family: str = "colqwen2",
+    retriever_model: str = "stub",
+    retriever_version: str = "stub_v1",
+) -> Dict[str, object]:
+    sidecar_dir = os.path.join(save_path, index_name)
+    os.makedirs(sidecar_dir, exist_ok=True)
+
+    candidate_records = build_visual_sidecar_candidate_records(
+        tree,
+        tenant_id=tenant_id,
+        doc_id=doc_id,
+        retriever_family=retriever_family,
+        retriever_model=retriever_model,
+        retriever_version=retriever_version,
+    )
+
+    candidates_filename = "candidates.json"
+    manifest_filename = "manifest.json"
+    candidates_path = os.path.join(sidecar_dir, candidates_filename)
+    manifest_path = os.path.join(sidecar_dir, manifest_filename)
+
+    with open(candidates_path, "w", encoding="utf-8") as f:
+        json.dump(candidate_records, f, ensure_ascii=False, indent=4)
+
+    manifest = {
+        "index_name": index_name,
+        "status": "stub_only",
+        "retriever_family": retriever_family,
+        "retriever_model": retriever_model,
+        "retriever_version": retriever_version,
+        "candidate_count": len(candidate_records),
+        "created_at": _utc_now_isoformat(),
+        "artifacts": [
+            {
+                "artifact_type": "candidate_metadata",
+                "path": candidates_filename,
+                "count": len(candidate_records),
+            }
+        ],
+    }
+
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=4)
+
+    log.info(
+        "Visual sidecar stub written to %s with %s candidate(s).",
+        sidecar_dir,
+        len(candidate_records),
+    )
+    return manifest
 
 
 def process_tree_nodes(tree: DocumentTree) -> Tuple[Dict[str, List], Dict[str, List]]:
