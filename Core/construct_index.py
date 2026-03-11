@@ -19,6 +19,7 @@ from Core.pipelines.vdb_index import (
     compute_mm_embedding_question,
 )
 from Core.provider.TokenTracker import TokenTracker
+from Core.provider.visual_sidecar import build_visual_sidecar_backend
 from Core.utils.file_utils import save_indexing_stats
 
 
@@ -158,10 +159,50 @@ def construct_visual_sidecar_stub(cfg: SystemConfig):
         save_path=cfg.save_path,
         tenant_id=cfg.tenant_id,
         doc_id=cfg.doc_id,
+        retriever_family=cfg.visual_sidecar.retriever_family,
+        retriever_model=cfg.visual_sidecar.retriever_model or cfg.visual_sidecar.retriever_family,
+        retriever_version=cfg.visual_sidecar.retriever_version,
     )
     sidecar_duration = time.time() - sidecar_start_time
     log.info(f"Visual sidecar stub constructed in {sidecar_duration:.2f} seconds.")
     current_run_stats["build_visual_sidecar_stub_time"] = round(sidecar_duration, 2)
+
+    current_run_stats["token_stage_history"] = token_tracker.stage_history
+    save_indexing_stats(save_path=cfg.save_path, new_stats=current_run_stats)
+    return manifest
+
+
+def construct_visual_sidecar_backend(cfg: SystemConfig):
+    token_tracker = TokenTracker.get_instance()
+    token_tracker.reset()
+
+    log.info("Starting visual sidecar backend construction...")
+    current_run_stats = {}
+
+    tree_start_time = time.time()
+    tree_index = build_tree_from_source(cfg)
+    tree_duration = time.time() - tree_start_time
+    log.info(f"Document tree constructed in {tree_duration:.2f} seconds.")
+    current_run_stats["build_tree_time"] = round(tree_duration, 2)
+
+    stub_start_time = time.time()
+    build_visual_sidecar_stub(
+        tree_index,
+        save_path=cfg.save_path,
+        tenant_id=cfg.tenant_id,
+        doc_id=cfg.doc_id,
+        retriever_family=cfg.visual_sidecar.retriever_family,
+        retriever_model=cfg.visual_sidecar.retriever_model or cfg.visual_sidecar.retriever_family,
+        retriever_version=cfg.visual_sidecar.retriever_version,
+    )
+    stub_duration = time.time() - stub_start_time
+    current_run_stats["build_visual_sidecar_stub_time"] = round(stub_duration, 2)
+
+    backend_start_time = time.time()
+    manifest = build_visual_sidecar_backend(cfg.save_path, cfg.visual_sidecar)
+    backend_duration = time.time() - backend_start_time
+    log.info(f"Visual sidecar backend constructed in {backend_duration:.2f} seconds.")
+    current_run_stats["build_visual_sidecar_backend_time"] = round(backend_duration, 2)
 
     current_run_stats["token_stage_history"] = token_tracker.stage_history
     save_indexing_stats(save_path=cfg.save_path, new_stats=current_run_stats)

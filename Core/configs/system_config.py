@@ -11,6 +11,7 @@ from Core.configs.ontology_config import OntologyConfig
 from Core.configs.vlm_config import VLMConfig
 from Core.configs.rag_config import RAGConfig
 from Core.configs.vdb_config import VDBConfig
+from Core.configs.visual_sidecar_config import VisualSidecarConfig
 from Core.configs.falkordb_config import FalkorDBConfig
 from Core.configs.mongodb_config import MongoDBConfig
 from pydantic import BaseModel, Field
@@ -37,6 +38,7 @@ class SystemConfig(BaseModel):
     tree: TreeConfig = Field(default_factory=TreeConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
     vdb: VDBConfig = Field(default_factory=VDBConfig)
+    visual_sidecar: VisualSidecarConfig = Field(default_factory=VisualSidecarConfig)
     ontology: OntologyConfig = Field(default_factory=OntologyConfig)
     entity_resolution: EntityResolutionConfig = Field(default_factory=EntityResolutionConfig)
 

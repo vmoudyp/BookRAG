@@ -46,6 +46,14 @@ class GBCRAGConfig(BaseRAGStrategyConfig):
         default=3,
         description="The maximum number of retries for the LLM to generate a valid response.",
     )
+    visual_sidecar_query_enabled: bool = Field(
+        default=False,
+        description="Enable conservative query-time augmentation from visual sidecar artifacts.",
+    )
+    visual_sidecar_query_topk: int = Field(
+        default=3,
+        description="Maximum number of visual sidecar node IDs to append after skyline retrieval.",
+    )
     reranker_config: RerankerConfig = Field(
         default_factory=RerankerConfig,
     )

@@ -196,6 +196,12 @@ The current implementation work for this branch should stop at the safe integrat
   - `candidates.json`
   - per-leaf structural/source metadata for future ColQwen2 / ColPali indexing
 
+The next safe implementation step after the stub is a backend materialization layer that reads `candidates.json` and writes retriever-specific build artifacts under:
+
+- `save_path/visual_leaf_sidecar/backends/<backend_type>__<retriever_family>__<retriever_version>/`
+  - `backend_manifest.json`
+  - `documents.jsonl`
+
 The actual ColQwen2 / ColPali runtime backend remains a separate follow-up task.
 
 ## 6. Query-time fusion design

@@ -12,6 +12,7 @@ from Core.configs.dataset_config import load_dataset_config, DatasetConfig
 from Core.construct_index import (
     construct_gbc_index,
     construct_vdb,
+    construct_visual_sidecar_backend,
     construct_visual_sidecar_stub,
     compute_mm_reranker,
     rebuild_graph_vdb,
@@ -115,6 +116,7 @@ def create_args():
             "mm_reranker",
             "rebuild_graph_vdb",
             "visual_sidecar_stub",
+            "visual_sidecar_backend",
         ],
         help="Specify which stage of the indexing pipeline to run: "
         "'tree' - Build and save the document tree only. "
@@ -123,7 +125,8 @@ def create_args():
         "'all' - Run all stages sequentially."
         "'mm_reranker' - Build and save the multi-modal reranker (requires a tree). "
         "'rebuild_graph_vdb' - Rebuild the graph and vector database (requires GBC Index). "
-        "'visual_sidecar_stub' - Write sidecar-ready visual leaf metadata for a future local retriever.",
+        "'visual_sidecar_stub' - Write sidecar-ready visual leaf metadata for a future local retriever. "
+        "'visual_sidecar_backend' - Materialize backend-specific visual sidecar artifacts from the stub candidates.",
     )
 
     return parser.parse_args()
@@ -163,6 +166,10 @@ def build_index(config: SystemConfig, stage: str = "all", data_df: pd.DataFrame 
     if stage == "visual_sidecar_stub":
         log.info("  - STAGE: Building Visual Sidecar Stub...")
         construct_visual_sidecar_stub(config)
+
+    if stage == "visual_sidecar_backend":
+        log.info("  - STAGE: Building Visual Sidecar Backend...")
+        construct_visual_sidecar_backend(config)
 
 
 def run_inference(config: SystemConfig, data_df: pd.DataFrame, dataset_name: str):

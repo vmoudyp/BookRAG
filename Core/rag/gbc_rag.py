@@ -6,6 +6,7 @@ from Core.rag.base_rag import BaseRAG
 from Core.provider.llm import LLM
 from Core.provider.vlm import VLM
 from Core.provider.rerank import TextRerankerProvider
+from Core.provider.visual_sidecar import query_visual_sidecar
 from Core.configs.rag.gbc_config import GBCRAGConfig
 from Core.Index.GBCIndex import GBC
 from Core.prompts.gbc_prompt import (
@@ -426,6 +427,62 @@ class GBCRAG(BaseRAG):
         iter_context.iteration_image_nodes = image_nodes
         iter_context.iteration_text_nodes = text_nodes
 
+    def _augment_with_visual_sidecar(
+        self,
+        tree_node_ids: List[int],
+        subtree_nodes: List[TreeNode],
+        sub_query: str,
+    ) -> tuple[List[int], List[int]]:
+        if not getattr(self.cfg, "visual_sidecar_query_enabled", False):
+            return tree_node_ids, []
+
+        system_cfg = getattr(self.gbc_index, "config", None)
+        sidecar_cfg = getattr(system_cfg, "visual_sidecar", None) if system_cfg else None
+        save_path = getattr(system_cfg, "save_path", None) or getattr(self.gbc_index, "save_dir", None)
+        if sidecar_cfg is None or not save_path:
+            return tree_node_ids, []
+
+        try:
+            visual_hits = query_visual_sidecar(
+                save_path=save_path,
+                sidecar_cfg=sidecar_cfg,
+                query_text=sub_query,
+                allowed_node_ids=[node.index_id for node in subtree_nodes],
+                top_k=max(0, self.cfg.visual_sidecar_query_topk),
+            )
+        except Exception as exc:
+            log.warning("Visual sidecar query failed for sub-query '%s': %s", sub_query, exc)
+            return tree_node_ids, []
+
+        if not visual_hits:
+            return tree_node_ids, []
+
+        augmented_ids: List[int] = []
+        seen_ids = set()
+        for node_id in tree_node_ids:
+            if node_id in seen_ids:
+                continue
+            augmented_ids.append(node_id)
+            seen_ids.add(node_id)
+
+        supplementary_ids: List[int] = []
+        for hit in visual_hits:
+            node_id = hit.get("node_id")
+            if node_id is None or node_id in seen_ids:
+                continue
+            augmented_ids.append(node_id)
+            supplementary_ids.append(node_id)
+            seen_ids.add(node_id)
+
+        if supplementary_ids:
+            log.info(
+                "Visual sidecar query added %s node(s) to retrieval: %s",
+                len(supplementary_ids),
+                supplementary_ids,
+            )
+
+        return augmented_ids, supplementary_ids
+
     def get_GBC_info(self, iter_context: SubStep) -> None:
         """
         1. Get subgraph: sel_sec_id --> subtree --> subgraph.
@@ -456,6 +513,13 @@ class GBCRAG(BaseRAG):
         tree_node_ids, res_entities = self.retriever.skyline_filter(
             iter_context.sub_query, subtree_nodes, subgraph, start_ent_map
         )
+
+        tree_node_ids, supplementary_ids = self._augment_with_visual_sidecar(
+            tree_node_ids,
+            subtree_nodes,
+            iter_context.sub_query,
+        )
+        iter_context.supplementary_ids = supplementary_ids
 
         log.info(f"After skyline filtering, select {len(tree_node_ids)} TreeNodes")
 
