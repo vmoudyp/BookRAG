@@ -47,6 +47,7 @@ def build_knowledge_graph(tree: DocumentTree, cfg: SystemConfig):
         tenant_id=cfg.tenant_id,
         doc_id=cfg.doc_id,
         falkordb_cfg=falkordb_cfg,
+        role_graph_materialization=cfg.graph.role_graph_materialization,
     )
 
     kg_extractor = KGExtractor(

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -36,6 +36,23 @@ class FormulaExtractionResult(BaseModel):
 
 class EntityExtractionResult(BaseModel):
     entities: List[ExtractEntity]
+
+
+class ExtractedRole(BaseModel):
+    """A single domain role assignment extracted from text by the LLM."""
+
+    entity_name: str  # Must match an entity name from the provided entity list
+    role_name: str  # The role title as stated or paraphrased from the text
+    scope_entity_name: Optional[str] = None  # Org/country this role is within, if mentioned
+    tenure_status: str = "unknown"  # current | former | acting | interim | candidate | unknown
+    evidence_text: Optional[str] = None  # Short supporting quote/paraphrase from the text
+    confidence: Optional[float] = None  # 0.0–1.0, how explicitly the role is stated
+
+
+class RoleExtractionResult(BaseModel):
+    """JSON output schema for the ROLE_EXTRACTION prompt."""
+
+    roles: List[ExtractedRole]
 
 
 # This file is part of the Knowledge Graph Prompting project.
@@ -1339,3 +1356,41 @@ ER_RERANK_INSTRUCTION = (
     "variations in their descriptions. A low score means they are fundamentally different entities, "
     "even if their names or descriptions share some keywords."
 )
+
+
+ROLE_EXTRACTION = """-Goal-
+You are an information extraction system. Given a passage of text and a list of named entities
+(persons or organizations), identify any domain roles (job titles, political offices, organizational
+positions) that those entities hold as explicitly described in the text.
+
+-Entity List-
+{entity_list}
+
+-Text-
+{input_text}
+
+-Rules-
+1. Only extract roles EXPLICITLY stated in the text. Do not infer or hallucinate.
+2. Only assign roles to entities present in the entity list above.
+3. If an entity holds multiple roles, include one entry per role.
+4. If no roles are found, return {{"roles": []}}.
+5. Do not use honorifics (Mr., Dr.) as role names; extract the actual position title
+   (e.g., "Minister of Finance", not "Dr.").
+6. For tenure_status, use: current, former, acting, interim, candidate, or unknown.
+
+-Output Format-
+Return ONLY a valid JSON object matching this schema:
+
+{{
+  "roles": [
+    {{
+      "entity_name": "<exact name from entity list>",
+      "role_name": "<role title from text>",
+      "scope_entity_name": "<org/country this role is within, or null>",
+      "tenure_status": "<current|former|acting|interim|candidate|unknown>",
+      "evidence_text": "<short supporting quote or close paraphrase from the text>",
+      "confidence": <0.0-1.0>
+    }}
+  ]
+}}
+"""

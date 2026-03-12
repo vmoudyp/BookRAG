@@ -14,6 +14,50 @@ if TYPE_CHECKING:
     from Core.configs.falkordb_config import FalkorDBConfig
 
 
+class RoleEvidence(BaseModel):
+    """A single piece of evidence supporting a domain role assignment."""
+
+    source_id: int  # Tree/source node that contains this evidence
+    observed_role_text: str  # Literal wording from the document (e.g. "Korsek")
+    evidence_text: Optional[str] = None  # Short excerpt supporting the role
+    language: Optional[str] = None  # Language code, e.g. "id", "en"
+    normalization_method: str = "unresolved"  # alias/abbreviation/fuzzy/embedding/llm/manual/unresolved
+    confidence: Optional[float] = None  # Confidence for this evidence item
+    provenance: Optional[dict] = None  # Extra metadata for extraction/debugging
+
+
+class RoleAssignment(BaseModel):
+    """A structured domain-level role assertion attached to an entity.
+
+    Distinct from:
+    - auth ``role`` (admin/user)
+    - ``source_role`` (title/body_text/image/table in document tree)
+    - ``entity_role`` (canonical/provisional lifecycle state)
+    """
+
+    assignment_id: str  # Stable UUID for this assignment
+    role_name: str  # Canonical role label, e.g. "Koordinator Sektor"
+    role_id: Optional[str] = None  # Optional stable vocabulary identifier
+    scope_entity_name: Optional[str] = None  # Context entity, e.g. "Indonesia"
+    scope_entity_type: Optional[str] = None  # Type of scope entity, e.g. "COUNTRY"
+    scope_entity_id: Optional[str] = None  # Optional canonical ID for scope entity
+    start_date: Optional[str] = None  # Partial ISO-compatible: YYYY, YYYY-MM, or YYYY-MM-DD
+    end_date: Optional[str] = None  # Same format as start_date
+    tenure_status: str = "unknown"  # current/former/acting/interim/candidate/unknown
+    origin: str = "extracted"  # extracted / manual
+    review_status: str = "suggested"  # suggested/confirmed/disputed/rejected
+    confidence: Optional[float] = None  # Overall assignment confidence
+    normalization_status: str = "unresolved"  # matched/ambiguous/unresolved/manual_override
+    normalization_confidence: Optional[float] = None  # Confidence of role-name normalization
+    source_ids: List[int] = Field(default_factory=list)  # Supporting tree node IDs
+    evidence: List[RoleEvidence] = Field(default_factory=list)  # Evidence items
+    provenance: Optional[dict] = None  # Free-form trace metadata
+    created_by: Optional[str] = None  # Audit: who created this assignment
+    updated_by: Optional[str] = None  # Audit: who last updated it
+    created_at: Optional[str] = None  # Audit: ISO timestamp of creation
+    updated_at: Optional[str] = None  # Audit: ISO timestamp of last update
+
+
 class Entity(BaseModel):
     entity_name: str  # Primary key for entity
     entity_type: str = Field(default="")  # Entity type
@@ -27,6 +71,9 @@ class Entity(BaseModel):
     source_ids: Set[int] = Field(
         default_factory=set
     )  # Set of source IDs from which this entity is derived
+    role_assignments: List[RoleAssignment] = Field(
+        default_factory=list
+    )  # Domain-level role assertions (e.g. President, CEO)
 
     def __hash__(self):
         """
@@ -57,6 +104,9 @@ class Entity(BaseModel):
             "mapping_confidence": float(self.mapping_confidence or 0.0),
             "ontology_source": self.ontology_source,
             "aliases_json": json.dumps(aliases, ensure_ascii=False),
+            "role_assignments_json": json.dumps(
+                [ra.model_dump() for ra in self.role_assignments], ensure_ascii=False
+            ),
         }
 
 
@@ -93,6 +143,7 @@ class Graph:
         tenant_id: str = None,
         doc_id: str = None,
         falkordb_cfg=None,  # Optional[FalkorDBConfig]
+        role_graph_materialization: bool = False,
     ):
         self.kg = nx.Graph()
         # 节点名采用 "entity_name (entity_type)"，确保唯一性
@@ -109,6 +160,9 @@ class Graph:
         self._fdb_graph_name: Optional[str] = None
         if self.use_falkordb:
             self._fdb_graph_name = falkordb_cfg.graph_name_for_doc(tenant_id, doc_id)
+
+        # Phase 2: promote role_assignments to first-class graph edges when enabled
+        self.role_graph_materialization = role_graph_materialization
 
         # dynamic filename based on variant
         self.data_filename = self._get_filename(variant)
@@ -370,6 +424,13 @@ class Graph:
             ontology_source = _esc(data.get("ontology_source", ""))
             aliases_json = _esc(json.dumps(data.get("aliases", []), ensure_ascii=False))
             mapping_confidence = float(data.get("mapping_confidence", 0.0) or 0.0)
+            raw_roles = data.get("role_assignments", [])
+            role_assignments_json = _esc(
+                json.dumps(
+                    [ra.model_dump() if isinstance(ra, RoleAssignment) else ra for ra in raw_roles],
+                    ensure_ascii=False,
+                )
+            )
             nname = _esc(node_name)
             cypher = (
                 f"CREATE (n:Entity {{"
@@ -383,6 +444,7 @@ class Graph:
                 f"mapping_confidence: {mapping_confidence}, "
                 f"ontology_source: '{ontology_source}', "
                 f"description: '{desc}', "
+                f"role_assignments_json: '{role_assignments_json}', "
                 f"source_ids: {source_ids_list}"
                 f"}})"
             )
@@ -408,9 +470,83 @@ class Graph:
             )
             g.query(cypher)
 
-        # Write tree2kg as node property (source_ids already on nodes)
+        # Phase 2: materialize role_assignments as first-class graph edges
+        if self.role_graph_materialization:
+            self._materialize_role_edges(g, _esc)
+
         log.info(f"Saved graph to FalkorDB '{self._fdb_graph_name}': "
                  f"{self.kg.number_of_nodes()} nodes, {self.kg.number_of_edges()} edges.")
+
+    def _materialize_role_edges(self, g, _esc) -> None:
+        """Write :RoleNode nodes and (Entity)-[:HAS_ROLE]->(RoleNode) edges to FalkorDB.
+
+        Called from ``_save_to_falkordb`` when ``role_graph_materialization`` is True.
+        Uses MERGE on role_id (if present) or role_name to avoid duplicate Role nodes.
+        """
+        role_node_ids: set = set()
+
+        for node_name, data in self.kg.nodes(data=True):
+            raw_roles = data.get("role_assignments", [])
+            if not raw_roles:
+                continue
+
+            for ra in raw_roles:
+                # Accept both RoleAssignment objects and plain dicts (after JSON round-trip)
+                if isinstance(ra, RoleAssignment):
+                    ra_dict = ra.model_dump()
+                else:
+                    ra_dict = ra
+
+                assignment_id = _esc(ra_dict.get("assignment_id", ""))
+                role_name = _esc(ra_dict.get("role_name", ""))
+                role_id = _esc(ra_dict.get("role_id") or "")
+                scope = _esc(ra_dict.get("scope_entity_name") or "")
+                tenure = _esc(ra_dict.get("tenure_status", "unknown"))
+                review = _esc(ra_dict.get("review_status", "suggested"))
+                origin = _esc(ra_dict.get("origin", "extracted"))
+                confidence = float(ra_dict.get("confidence") or 0.0)
+                start_date = _esc(ra_dict.get("start_date") or "")
+                end_date = _esc(ra_dict.get("end_date") or "")
+
+                # Stable identity key for Role node: prefer role_id, fall back to role_name
+                role_node_key = role_id if role_id else role_name
+                if role_node_key not in role_node_ids:
+                    cypher_role = (
+                        f"MERGE (r:RoleNode {{role_key: '{role_node_key}'}}) "
+                        f"ON CREATE SET r.role_name = '{role_name}', r.role_id = '{role_id}'"
+                    )
+                    try:
+                        g.query(cypher_role)
+                        role_node_ids.add(role_node_key)
+                    except Exception as exc:
+                        log.warning(f"Failed to MERGE RoleNode '{role_node_key}': {exc}")
+                        continue
+
+                nname_esc = _esc(node_name)
+                cypher_edge = (
+                    f"MATCH (e:Entity {{node_name: '{nname_esc}'}}), "
+                    f"(r:RoleNode {{role_key: '{role_node_key}'}}) "
+                    f"CREATE (e)-[:HAS_ROLE {{"
+                    f"assignment_id: '{assignment_id}', "
+                    f"tenure_status: '{tenure}', "
+                    f"review_status: '{review}', "
+                    f"origin: '{origin}', "
+                    f"scope_entity_name: '{scope}', "
+                    f"start_date: '{start_date}', "
+                    f"end_date: '{end_date}', "
+                    f"confidence: {confidence}"
+                    f"}}]->(r)"
+                )
+                try:
+                    g.query(cypher_edge)
+                except Exception as exc:
+                    log.warning(
+                        f"Failed to create HAS_ROLE edge for entity '{node_name}' -> '{role_node_key}': {exc}"
+                    )
+
+        log.info(
+            f"Role materialization complete: {len(role_node_ids)} unique RoleNode(s) written."
+        )
 
     def _load_from_falkordb(self) -> None:
         """Load graph data from FalkorDB into in-memory NetworkX graph."""
@@ -426,6 +562,12 @@ class Graph:
                 aliases = json.loads(aliases_json) if isinstance(aliases_json, str) else list(aliases_json or [])
             except json.JSONDecodeError:
                 aliases = []
+            raw_roles_json = props.get("role_assignments_json", "[]")
+            try:
+                raw_roles = json.loads(raw_roles_json) if isinstance(raw_roles_json, str) else list(raw_roles_json or [])
+                role_assignments = [RoleAssignment(**r) for r in raw_roles]
+            except Exception:
+                role_assignments = []
             self.kg.add_node(node_name,
                              entity_name=props.get("entity_name", ""),
                              entity_type=props.get("entity_type", ""),
@@ -436,7 +578,8 @@ class Graph:
                              mapping_confidence=float(props.get("mapping_confidence", 0.0) or 0.0),
                              ontology_source=props.get("ontology_source", ""),
                              description=props.get("description", ""),
-                             source_ids=source_ids)
+                             source_ids=source_ids,
+                             role_assignments=role_assignments)
             for tid in source_ids:
                 self.tree2kg[int(tid)].add(node_name)
 
@@ -481,6 +624,12 @@ class Graph:
                 aliases = json.loads(aliases_json) if isinstance(aliases_json, str) else list(aliases_json or [])
             except json.JSONDecodeError:
                 aliases = []
+            raw_roles_json = props.get("role_assignments_json", "[]")
+            try:
+                raw_roles = json.loads(raw_roles_json) if isinstance(raw_roles_json, str) else list(raw_roles_json or [])
+                role_assignments = [RoleAssignment(**r) for r in raw_roles]
+            except Exception:
+                role_assignments = []
             subgraph.add_node(node_name,
                               entity_name=props.get("entity_name", ""),
                               entity_type=props.get("entity_type", ""),
@@ -491,7 +640,8 @@ class Graph:
                               mapping_confidence=float(props.get("mapping_confidence", 0.0) or 0.0),
                               ontology_source=props.get("ontology_source", ""),
                               description=props.get("description", ""),
-                              source_ids=set(props.get("source_ids", [])))
+                              source_ids=set(props.get("source_ids", [])),
+                              role_assignments=role_assignments)
 
         edge_result = g.query(
             f"MATCH (a:Entity)-[r:RELATION]->(b:Entity) "
@@ -594,6 +744,12 @@ class Graph:
             node_data.setdefault("aliases", [])
             node_data.setdefault("mapping_confidence", 0.0)
             node_data.setdefault("ontology_source", "")
+            # Deserialize role_assignments stored as raw dicts in JSON
+            raw_roles = node_data.get("role_assignments", [])
+            if raw_roles and isinstance(raw_roles[0], dict):
+                node_data["role_assignments"] = [RoleAssignment(**r) for r in raw_roles]
+            else:
+                node_data.setdefault("role_assignments", [])
 
         for _, _, edge_data in graph_instance.kg.edges(data=True):
             if "source_ids" in edge_data and isinstance(edge_data["source_ids"], list):

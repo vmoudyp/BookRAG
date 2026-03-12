@@ -142,6 +142,7 @@ def _list_entities_sync(tenant_id: str, doc_id: str, config_path: str) -> List[d
             "description": entity.description,
             "source_ids": sorted(entity.source_ids),
             "node_name": node_name,
+            "role_assignments": [ra.model_dump() for ra in entity.role_assignments],
         })
     return sorted(result, key=lambda e: e["entity_name"].lower())
 
@@ -173,6 +174,7 @@ def _rename_sync(
         entity_type=effective_type,
         description=effective_desc,
         source_ids=old_entity.source_ids,
+        role_assignments=old_entity.role_assignments,  # preserve role assignments across renames
     )
     graph.update_entity(entity_name, entity_type, new_entity)
     graph.save_graph()
@@ -184,6 +186,7 @@ def _rename_sync(
         "description": effective_desc,
         "source_ids": sorted(new_entity.source_ids),
         "node_name": new_node,
+        "role_assignments": [ra.model_dump() for ra in new_entity.role_assignments],
     }]
 
 
@@ -235,10 +238,18 @@ def _split_sync(
         spec_desc = spec.get("description") or old_entity.description
         spec_sids = set(spec.get("source_ids") or old_entity.source_ids)
 
+        # Conservative role assignment split: only carry roles whose evidence
+        # source_ids intersect with this child entity's source_ids.
+        child_roles = [
+            ra for ra in old_entity.role_assignments
+            if set(ra.source_ids) & spec_sids
+        ]
+
         new_node = graph.get_node_name_from_str(spec_name, spec_type)
         graph.add_kg_node(Entity(
             entity_name=spec_name, entity_type=spec_type,
             description=spec_desc, source_ids=spec_sids,
+            role_assignments=child_roles,
         ))
 
         if edge_mode == "duplicate":
@@ -252,6 +263,7 @@ def _split_sync(
         created.append({
             "entity_name": spec_name, "entity_type": spec_type,
             "description": spec_desc, "source_ids": sorted(spec_sids), "node_name": new_node,
+            "role_assignments": [ra.model_dump() for ra in child_roles],
         })
 
     for _, nodes in graph.tree2kg.items():
@@ -372,6 +384,53 @@ async def suggest_merges(
     )
 # ── Merge entities ────────────────────────────────────────────────────────────
 
+def _merge_role_assignments(all_lists) -> list:
+    """Union and deduplicate role assignments from multiple entity sources.
+
+    Deduplication key: (role_id or normalised role_name, normalised scope, tenure_status, start_date, end_date).
+    Conflict resolution priority: confirmed > suggested, manual > extracted,
+    higher normalization_confidence wins.  source_ids and evidence are always unioned.
+    """
+    from Core.Index.Graph import RoleAssignment, RoleEvidence
+
+    seen: dict = {}  # key -> winning RoleAssignment
+
+    def _dedup_key(ra: RoleAssignment) -> tuple:
+        role_key = (ra.role_id or ra.role_name.strip().lower())
+        scope_key = (ra.scope_entity_name or "").strip().lower()
+        return (role_key, scope_key, ra.tenure_status, ra.start_date or "", ra.end_date or "")
+
+    _review_priority = {"confirmed": 0, "disputed": 1, "suggested": 2, "rejected": 3}
+    _origin_priority = {"manual": 0, "extracted": 1}
+
+    for role_list in all_lists:
+        for ra in role_list:
+            key = _dedup_key(ra)
+            if key not in seen:
+                seen[key] = ra
+            else:
+                existing = seen[key]
+                # prefer stronger review_status
+                if _review_priority.get(ra.review_status, 99) < _review_priority.get(existing.review_status, 99):
+                    seen[key] = ra
+                    existing = ra
+                # prefer manual over extracted
+                elif _origin_priority.get(ra.origin, 99) < _origin_priority.get(existing.origin, 99):
+                    seen[key] = ra
+                    existing = ra
+                # union source_ids and evidence
+                merged_sids = list(set(existing.source_ids) | set(ra.source_ids))
+                existing_ev_ids = {(e.source_id, e.observed_role_text) for e in existing.evidence}
+                merged_ev = list(existing.evidence) + [
+                    e for e in ra.evidence if (e.source_id, e.observed_role_text) not in existing_ev_ids
+                ]
+                seen[key] = RoleAssignment(
+                    **{**existing.model_dump(), "source_ids": merged_sids, "evidence": [e.model_dump() for e in merged_ev]}
+                )
+
+    return list(seen.values())
+
+
 def _merge_sync(
     tenant_id: str, doc_id: str, config_path: str,
     source_entities: List[dict],
@@ -381,12 +440,14 @@ def _merge_sync(
 
     graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
 
-    # Collect all source_ids from entities being merged
+    # Collect all source_ids and role_assignments from entities being merged
     merged_source_ids: set = set()
+    all_role_lists = []
     for src in source_entities:
         try:
             ent = graph.get_entity(src["entity_name"], src["entity_type"])
             merged_source_ids.update(ent.source_ids)
+            all_role_lists.append(ent.role_assignments)
         except KeyError:
             log.warning(f"Merge: source entity not found: {src}")
 
@@ -394,22 +455,27 @@ def _merge_sync(
 
     # Ensure canonical node exists (may be one of the sources or brand new)
     if canonical_node not in graph.kg:
+        merged_roles = _merge_role_assignments(all_role_lists)
         canonical_entity = Entity(
             entity_name=canonical_name,
             entity_type=canonical_type,
             description=canonical_desc,
             source_ids=merged_source_ids,
+            role_assignments=merged_roles,
         )
         graph.add_kg_node(canonical_entity)
     else:
-        # Update description and source_ids on the existing node
+        # Update description, source_ids, and role_assignments on the existing node
         existing = graph.get_entity_by_node_name(canonical_node)
         merged_source_ids.update(existing.source_ids)
+        all_role_lists.append(existing.role_assignments)
+        merged_roles = _merge_role_assignments(all_role_lists)
         updated = Entity(
             entity_name=canonical_name,
             entity_type=canonical_type,
             description=canonical_desc or existing.description,
             source_ids=merged_source_ids,
+            role_assignments=merged_roles,
         )
         graph.kg.nodes[canonical_node].update(updated.model_dump())
 
@@ -442,6 +508,7 @@ def _merge_sync(
         "description": canonical_ent.description,
         "source_ids": sorted(canonical_ent.source_ids),
         "node_name": canonical_node,
+        "role_assignments": [ra.model_dump() for ra in canonical_ent.role_assignments],
     }]
 
 
@@ -464,5 +531,251 @@ async def merge_entities(
         "after": {"entity_name": canonical_name, "entity_type": canonical_type},
     })
     await _schedule_vdb_rebuild(tenant_id, doc_id, config_path)
+    return result
+
+
+# ── Domain role assignment CRUD ───────────────────────────────────────────────
+
+def _add_role_sync(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    role_input: dict, user_id: str,
+) -> List[dict]:
+    import uuid
+    from datetime import datetime, timezone
+    from Core.Index.Graph import Entity, RoleAssignment, RoleEvidence
+
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    entity = graph.get_entity(entity_name, entity_type)
+
+    evidence = [RoleEvidence(**e) for e in role_input.pop("evidence", [])]
+    now = datetime.now(timezone.utc).isoformat()
+    assignment = RoleAssignment(
+        assignment_id=str(uuid.uuid4()),
+        origin="manual",
+        review_status="confirmed",
+        normalization_status="manual_override",
+        created_by=user_id,
+        created_at=now,
+        updated_by=user_id,
+        updated_at=now,
+        evidence=evidence,
+        **role_input,
+    )
+    # Apply normalization unless the caller has already supplied a role_id
+    if not assignment.role_id:
+        try:
+            from Core.utils.role_normalizer import apply_normalization
+            assignment = apply_normalization(assignment)
+        except Exception as norm_exc:
+            log.warning("Role normalization skipped: %s", norm_exc)
+    updated_entity = Entity(
+        **{**entity.model_dump(), "role_assignments": entity.role_assignments + [assignment]}
+    )
+    graph.update_entity(entity_name, entity_type, updated_entity)
+    graph.save_graph()
+
+    refreshed = graph.get_entity(updated_entity.entity_name, updated_entity.entity_type)
+    return [{
+        "entity_name": refreshed.entity_name,
+        "entity_type": refreshed.entity_type,
+        "description": refreshed.description,
+        "source_ids": sorted(refreshed.source_ids),
+        "node_name": graph.get_node_name_from_entity(refreshed),
+        "role_assignments": [ra.model_dump() for ra in refreshed.role_assignments],
+    }]
+
+
+async def add_role_assignment(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    role_input: dict, user_id: str,
+) -> List[dict]:
+    async with _get_lock(tenant_id, doc_id):
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, _add_role_sync,
+            tenant_id, doc_id, config_path, entity_name, entity_type, role_input, user_id,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "add_role", "doc_id": doc_id, "user_id": user_id,
+        "entity": {"entity_name": entity_name, "entity_type": entity_type},
+    })
+    return result
+
+
+def _update_role_sync(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    assignment_id: str, update_fields: dict, user_id: str,
+) -> List[dict]:
+    from datetime import datetime, timezone
+    from Core.Index.Graph import Entity, RoleAssignment
+
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    entity = graph.get_entity(entity_name, entity_type)
+
+    new_roles = []
+    found = False
+    for ra in entity.role_assignments:
+        if ra.assignment_id == assignment_id:
+            found = True
+            merged = {**ra.model_dump(), **{k: v for k, v in update_fields.items() if v is not None}}
+            merged["updated_by"] = user_id
+            merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+            new_roles.append(RoleAssignment(**merged))
+        else:
+            new_roles.append(ra)
+
+    if not found:
+        raise KeyError(f"Role assignment '{assignment_id}' not found on entity '{entity_name}'.")
+
+    updated_entity = Entity(**{**entity.model_dump(), "role_assignments": new_roles})
+    graph.update_entity(entity_name, entity_type, updated_entity)
+    graph.save_graph()
+
+    refreshed = graph.get_entity(updated_entity.entity_name, updated_entity.entity_type)
+    return [{
+        "entity_name": refreshed.entity_name,
+        "entity_type": refreshed.entity_type,
+        "description": refreshed.description,
+        "source_ids": sorted(refreshed.source_ids),
+        "node_name": graph.get_node_name_from_entity(refreshed),
+        "role_assignments": [ra.model_dump() for ra in refreshed.role_assignments],
+    }]
+
+
+async def update_role_assignment(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    assignment_id: str, update_fields: dict, user_id: str,
+) -> List[dict]:
+    async with _get_lock(tenant_id, doc_id):
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, _update_role_sync,
+            tenant_id, doc_id, config_path, entity_name, entity_type,
+            assignment_id, update_fields, user_id,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "update_role", "doc_id": doc_id, "user_id": user_id,
+        "entity": {"entity_name": entity_name, "entity_type": entity_type},
+        "assignment_id": assignment_id,
+    })
+    return result
+
+
+def _review_role_sync(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    assignment_id: str, review_status: str,
+    role_name: Optional[str], role_id: Optional[str], user_id: str,
+) -> List[dict]:
+    from datetime import datetime, timezone
+    from Core.Index.Graph import Entity, RoleAssignment
+
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    entity = graph.get_entity(entity_name, entity_type)
+
+    new_roles = []
+    found = False
+    for ra in entity.role_assignments:
+        if ra.assignment_id == assignment_id:
+            found = True
+            overrides = {"review_status": review_status, "updated_by": user_id,
+                         "updated_at": datetime.now(timezone.utc).isoformat()}
+            if role_name is not None:
+                overrides["role_name"] = role_name
+                overrides["normalization_status"] = "manual_override"
+            if role_id is not None:
+                overrides["role_id"] = role_id
+            new_roles.append(RoleAssignment(**{**ra.model_dump(), **overrides}))
+        else:
+            new_roles.append(ra)
+
+    if not found:
+        raise KeyError(f"Role assignment '{assignment_id}' not found on entity '{entity_name}'.")
+
+    updated_entity = Entity(**{**entity.model_dump(), "role_assignments": new_roles})
+    graph.update_entity(entity_name, entity_type, updated_entity)
+    graph.save_graph()
+
+    refreshed = graph.get_entity(updated_entity.entity_name, updated_entity.entity_type)
+    return [{
+        "entity_name": refreshed.entity_name,
+        "entity_type": refreshed.entity_type,
+        "description": refreshed.description,
+        "source_ids": sorted(refreshed.source_ids),
+        "node_name": graph.get_node_name_from_entity(refreshed),
+        "role_assignments": [ra.model_dump() for ra in refreshed.role_assignments],
+    }]
+
+
+async def review_role_assignment(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    assignment_id: str, review_status: str,
+    role_name: Optional[str], role_id: Optional[str], user_id: str,
+) -> List[dict]:
+    async with _get_lock(tenant_id, doc_id):
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, _review_role_sync,
+            tenant_id, doc_id, config_path, entity_name, entity_type,
+            assignment_id, review_status, role_name, role_id, user_id,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "review_role", "doc_id": doc_id, "user_id": user_id,
+        "entity": {"entity_name": entity_name, "entity_type": entity_type},
+        "assignment_id": assignment_id, "review_status": review_status,
+    })
+    return result
+
+
+def _delete_role_sync(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    assignment_id: str,
+) -> List[dict]:
+    from Core.Index.Graph import Entity
+
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    entity = graph.get_entity(entity_name, entity_type)
+
+    new_roles = [ra for ra in entity.role_assignments if ra.assignment_id != assignment_id]
+    if len(new_roles) == len(entity.role_assignments):
+        raise KeyError(f"Role assignment '{assignment_id}' not found on entity '{entity_name}'.")
+
+    updated_entity = Entity(**{**entity.model_dump(), "role_assignments": new_roles})
+    graph.update_entity(entity_name, entity_type, updated_entity)
+    graph.save_graph()
+
+    refreshed = graph.get_entity(updated_entity.entity_name, updated_entity.entity_type)
+    return [{
+        "entity_name": refreshed.entity_name,
+        "entity_type": refreshed.entity_type,
+        "description": refreshed.description,
+        "source_ids": sorted(refreshed.source_ids),
+        "node_name": graph.get_node_name_from_entity(refreshed),
+        "role_assignments": [ra.model_dump() for ra in refreshed.role_assignments],
+    }]
+
+
+async def delete_role_assignment(
+    tenant_id: str, doc_id: str, config_path: str,
+    entity_name: str, entity_type: str,
+    assignment_id: str, user_id: str,
+) -> List[dict]:
+    async with _get_lock(tenant_id, doc_id):
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, _delete_role_sync,
+            tenant_id, doc_id, config_path, entity_name, entity_type, assignment_id,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "delete_role", "doc_id": doc_id, "user_id": user_id,
+        "entity": {"entity_name": entity_name, "entity_type": entity_type},
+        "assignment_id": assignment_id,
+    })
     return result
 

@@ -1,7 +1,7 @@
 from Core.provider.llm import LLM
 from Core.provider.vlm import VLM
 from Core.configs.graph_config import GraphConfig
-from Core.Index.Graph import Entity, Relationship, SetEncoder
+from Core.Index.Graph import Entity, Relationship, RoleAssignment, RoleEvidence, SetEncoder
 from Core.Index.Tree import TreeNode, NodeType
 from Core.prompts.kg_prompt import (
     DEFAULT_ENTITY_TYPES,
@@ -20,6 +20,8 @@ from Core.prompts.kg_prompt import (
     ExtractionResult,
     EntityExtractionResult,
     FormulaExtractionResult,
+    RoleExtractionResult,
+    ROLE_EXTRACTION,
 )
 from Core.Common.Memory import Memory
 from Core.Common.Message import Message
@@ -39,11 +41,12 @@ from Core.utils.table_utils import (
 from abc import ABC, abstractmethod
 import spacy
 import textacy.extract
-from typing import List, Dict, Tuple, Any, Union, final
+from typing import List, Dict, Tuple, Any, Union, Optional, final
 import logging
 import re
 import json
 import os
+import uuid
 from nltk.metrics.distance import edit_distance
 from concurrent.futures import ThreadPoolExecutor
 import re
@@ -328,6 +331,90 @@ class LLMExtractor(BaseExtractor):
 
         return entities_list, relationships_list
 
+    def _extract_roles_from_text(
+        self,
+        text: str,
+        entities: List[Entity],
+        node_id: int,
+    ) -> Dict[str, List[RoleAssignment]]:
+        """Run a dedicated LLM role-extraction pass over a text chunk.
+
+        Filters to PERSON/ORGANIZATION entities only, calls the LLM with the
+        ROLE_EXTRACTION prompt, and returns a dict mapping canonical entity_name
+        (original casing) -> list of RoleAssignment objects with evidence and
+        normalization already applied.
+        """
+        from Core.utils.role_normalizer import apply_normalization
+
+        # Only attempt extraction for person/org entities
+        role_entity_types = {"PERSON", "ORGANIZATION", "ORG", "GOVERNMENT", "OFFICIAL"}
+        role_entities = [
+            e for e in entities if e.entity_type.upper() in role_entity_types
+        ]
+        if not role_entities:
+            return {}
+
+        entity_list_str = "\n".join(
+            f"- {e.entity_name} ({e.entity_type})" for e in role_entities
+        )
+        prompt = ROLE_EXTRACTION.format(entity_list=entity_list_str, input_text=text)
+
+        try:
+            res: Optional[RoleExtractionResult] = self.llm.get_json_completion(
+                prompt, schema=RoleExtractionResult
+            )
+        except Exception as exc:
+            logger.error(f"Role extraction LLM call failed for node {node_id}: {exc}")
+            return {}
+
+        if not res or not res.roles:
+            return {}
+
+        # Case-insensitive lookup: lower_name -> canonical entity_name
+        name_map: Dict[str, str] = {e.entity_name.lower(): e.entity_name for e in role_entities}
+
+        result: Dict[str, List[RoleAssignment]] = {}
+        for extracted in res.roles:
+            canonical_name = name_map.get(extracted.entity_name.lower())
+            if canonical_name is None:
+                logger.debug(
+                    f"Role extraction: '{extracted.entity_name}' not in entity list for node {node_id}, skipping."
+                )
+                continue
+
+            evidence = RoleEvidence(
+                source_id=node_id,
+                observed_role_text=extracted.role_name,
+                evidence_text=extracted.evidence_text,
+                normalization_method="unresolved",
+                confidence=extracted.confidence,
+            )
+            assignment = RoleAssignment(
+                assignment_id=str(uuid.uuid4()),
+                role_name=extracted.role_name,
+                scope_entity_name=extracted.scope_entity_name,
+                tenure_status=extracted.tenure_status or "unknown",
+                origin="extracted",
+                review_status="suggested",
+                confidence=extracted.confidence,
+                source_ids=[node_id],
+                evidence=[evidence],
+            )
+            try:
+                assignment = apply_normalization(assignment)
+            except Exception as exc:
+                logger.warning(
+                    f"Role normalization failed for '{extracted.role_name}': {exc}"
+                )
+
+            result.setdefault(canonical_name, []).append(assignment)
+
+        logger.info(
+            f"Node {node_id}: role extraction found {sum(len(v) for v in result.values())} "
+            f"role assignments across {len(result)} entities."
+        )
+        return result
+
     def _extract_kg_from_text(self, node: TreeNode):
         content_texts = node.meta_info.content
         processor = TextProcessor()
@@ -344,6 +431,15 @@ class LLMExtractor(BaseExtractor):
         for text in chunks:
             records = self._extract_records_from_text(text)
             entities, relations = self._build_graph_from_records(records, node.index_id)
+
+            # Phase 1D: optional role extraction per chunk
+            if self.graph_config.role_extraction_enabled and entities:
+                role_map = self._extract_roles_from_text(text, entities, node.index_id)
+                for entity in entities:
+                    extra_roles = role_map.get(entity.entity_name, [])
+                    if extra_roles:
+                        entity.role_assignments = list(entity.role_assignments) + extra_roles
+
             res_entities.extend(entities)
             res_relation.extend(relations)
         return res_entities, res_relation

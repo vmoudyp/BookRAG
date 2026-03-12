@@ -1,0 +1,171 @@
+# BookRAG Domain Role Vocabulary
+# Maps stable role_id → canonical role name + known aliases.
+#
+# Usage:
+#   role_id       : stable identifier used as deduplication key in RoleAssignment.role_id
+#   canonical     : preferred display name written back to RoleAssignment.role_name
+#   aliases       : observed surface forms, abbreviations, or alternate spellings
+#                   (case-insensitive matching at runtime)
+#
+# Extend this file as new roles are discovered during curation.
+
+roles:
+  - role_id: role:president
+    canonical: President
+    aliases:
+      - Presiden
+      - President of the Republic
+      - Presiden RI
+      - Presiden Republik Indonesia
+      - Head of State
+
+  - role_id: role:vice_president
+    canonical: Vice President
+    aliases:
+      - Wakil Presiden
+      - Wapres
+      - Vice-President
+      - Deputy President
+
+  - role_id: role:minister
+    canonical: Minister
+    aliases:
+      - Menteri
+      - Min.
+      - Cabinet Minister
+      - Menko
+
+  - role_id: role:coordinating_minister
+    canonical: Coordinating Minister
+    aliases:
+      - Menteri Koordinator
+      - Menko
+      - Menkoinfo
+      - Menkopolhukam
+      - Menko Bidang
+
+  - role_id: role:governor
+    canonical: Governor
+    aliases:
+      - Gubernur
+      - Gov.
+      - Regional Governor
+
+  - role_id: role:mayor
+    canonical: Mayor
+    aliases:
+      - Walikota
+      - Wali Kota
+      - Bupati
+
+  - role_id: role:director_general
+    canonical: Director General
+    aliases:
+      - Dirjen
+      - Direktur Jenderal
+      - DG
+      - Dir. Gen.
+
+  - role_id: role:secretary_general
+    canonical: Secretary General
+    aliases:
+      - Sekjen
+      - Sekretaris Jenderal
+      - Sec. Gen.
+      - Secretary-General
+
+  - role_id: role:coordinator_sector
+    canonical: Koordinator Sektor
+    aliases:
+      - Korsek
+      - Koordinator Sektor
+      - Sector Coordinator
+      - Koordinator Bidang
+
+  - role_id: role:chairman
+    canonical: Chairman
+    aliases:
+      - Ketua
+      - Ketua Umum
+      - Chair
+      - Chairperson
+      - Ketua DPR
+      - Ketua MPR
+
+  - role_id: role:deputy
+    canonical: Deputy
+    aliases:
+      - Wakil
+      - Deputy Head
+      - Wakilnya
+      - Deputy Director
+
+  - role_id: role:head_of_department
+    canonical: Head of Department
+    aliases:
+      - Kepala Dinas
+      - Kadinas
+      - Department Head
+      - Kepala Bidang
+      - Kabid
+
+  - role_id: role:spokesperson
+    canonical: Spokesperson
+    aliases:
+      - Jubir
+      - Juru Bicara
+      - Spokesman
+      - Spokeswoman
+      - Press Secretary
+
+  - role_id: role:ceo
+    canonical: Chief Executive Officer
+    aliases:
+      - CEO
+      - Direktur Utama
+      - Dirut
+      - Managing Director
+      - Chief Executive
+
+  - role_id: role:cfo
+    canonical: Chief Financial Officer
+    aliases:
+      - CFO
+      - Finance Director
+      - Direktur Keuangan
+
+  - role_id: role:ambassador
+    canonical: Ambassador
+    aliases:
+      - Duta Besar
+      - Dubes
+      - Amb.
+      - High Commissioner
+
+  - role_id: role:member_of_parliament
+    canonical: Member of Parliament
+    aliases:
+      - MP
+      - DPR Member
+      - Anggota DPR
+      - Anggota MPR
+      - Legislator
+      - Congressman
+      - Senator
+
+  - role_id: role:judge
+    canonical: Judge
+    aliases:
+      - Hakim
+      - Hakim Agung
+      - Chief Justice
+      - Associate Justice
+      - Ketua Mahkamah
+
+  - role_id: role:rector
+    canonical: Rector
+    aliases:
+      - Rektor
+      - University Rector
+      - Vice-Chancellor
+

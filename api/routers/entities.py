@@ -11,6 +11,7 @@ from api.models.requests import (
     MergeEntitiesRequest,
     SplitEntityRequest,
     SuggestMergesResponse, MergeSuggestion, EntityRef,
+    AddRoleRequest, UpdateRoleRequest, ReviewRoleRequest,
 )
 from api.dependencies import get_current_user, check_doc_access
 import api.services.entity_editor as svc
@@ -197,6 +198,186 @@ async def split_entity(
         success=True,
         message=f"Split '{req.entity_name}' into {len(created)} entities",
         entities=[EntityInfo(**e) for e in created],
+    )
+
+
+# ── Domain role assignments ───────────────────────────────────────────────────
+
+@router.post(
+    "/{doc_id}/roles",
+    response_model=EntityOperationResponse,
+    summary="Add a domain role assignment",
+    description="Manually add a domain-level role assignment (e.g. President, CEO) to an entity.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Entity not found."},
+        500: {"description": "Role assignment creation failed."},
+    },
+)
+async def add_role_assignment(
+    doc_id: str,
+    req: AddRoleRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Add a manual domain role assignment to an entity."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    try:
+        updated = await svc.add_role_assignment(
+            tenant_id=tenant_id, doc_id=doc_id, config_path=CONFIG_PATH,
+            entity_name=req.entity_name, entity_type=req.entity_type,
+            role_input=req.role_assignment.model_dump(),
+            user_id=user_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        log.exception(f"add_role_assignment failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return EntityOperationResponse(
+        success=True,
+        message=f"Added role '{req.role_assignment.role_name}' to '{req.entity_name}'",
+        entities=[EntityInfo(**e) for e in updated],
+    )
+
+
+@router.patch(
+    "/{doc_id}/roles/{assignment_id}",
+    response_model=EntityOperationResponse,
+    summary="Update a domain role assignment",
+    description="Update fields on an existing role assignment by its assignment_id.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Entity or role assignment not found."},
+        500: {"description": "Role assignment update failed."},
+    },
+)
+async def update_role_assignment(
+    doc_id: str,
+    assignment_id: str,
+    req: UpdateRoleRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update an existing domain role assignment."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    update_fields = req.model_dump(exclude={"entity_name", "entity_type"}, exclude_none=True)
+
+    try:
+        updated = await svc.update_role_assignment(
+            tenant_id=tenant_id, doc_id=doc_id, config_path=CONFIG_PATH,
+            entity_name=req.entity_name, entity_type=req.entity_type,
+            assignment_id=assignment_id, update_fields=update_fields,
+            user_id=user_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        log.exception(f"update_role_assignment failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return EntityOperationResponse(
+        success=True,
+        message=f"Updated role assignment '{assignment_id}' on '{req.entity_name}'",
+        entities=[EntityInfo(**e) for e in updated],
+    )
+
+
+@router.post(
+    "/{doc_id}/roles/{assignment_id}/review",
+    response_model=EntityOperationResponse,
+    summary="Review a domain role assignment",
+    description="Set review status (confirmed/disputed/rejected) on a role assignment, optionally overriding its canonical role name.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Entity or role assignment not found."},
+        422: {"description": "Invalid review_status value."},
+        500: {"description": "Role assignment review failed."},
+    },
+)
+async def review_role_assignment(
+    doc_id: str,
+    assignment_id: str,
+    req: ReviewRoleRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set review state on a domain role assignment."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    valid_statuses = {"confirmed", "disputed", "rejected"}
+    if req.review_status not in valid_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"review_status must be one of: {', '.join(sorted(valid_statuses))}",
+        )
+
+    try:
+        updated = await svc.review_role_assignment(
+            tenant_id=tenant_id, doc_id=doc_id, config_path=CONFIG_PATH,
+            entity_name=req.entity_name, entity_type=req.entity_type,
+            assignment_id=assignment_id, review_status=req.review_status,
+            role_name=req.role_name, role_id=req.role_id,
+            user_id=user_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        log.exception(f"review_role_assignment failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return EntityOperationResponse(
+        success=True,
+        message=f"Role assignment '{assignment_id}' marked '{req.review_status}'",
+        entities=[EntityInfo(**e) for e in updated],
+    )
+
+
+@router.delete(
+    "/{doc_id}/roles/{assignment_id}",
+    response_model=EntityOperationResponse,
+    summary="Delete a domain role assignment",
+    description="Permanently remove a role assignment from an entity by its assignment_id.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        404: {"description": "Entity or role assignment not found."},
+        500: {"description": "Role assignment deletion failed."},
+    },
+)
+async def delete_role_assignment(
+    doc_id: str,
+    assignment_id: str,
+    entity_name: str = Query(..., description="Name of the entity owning the assignment."),
+    entity_type: str = Query(..., description="Type of the entity owning the assignment."),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a domain role assignment from an entity."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    try:
+        updated = await svc.delete_role_assignment(
+            tenant_id=tenant_id, doc_id=doc_id, config_path=CONFIG_PATH,
+            entity_name=entity_name, entity_type=entity_type,
+            assignment_id=assignment_id, user_id=user_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        log.exception(f"delete_role_assignment failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return EntityOperationResponse(
+        success=True,
+        message=f"Deleted role assignment '{assignment_id}' from '{entity_name}'",
+        entities=[EntityInfo(**e) for e in updated],
     )
 
 

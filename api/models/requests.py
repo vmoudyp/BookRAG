@@ -406,6 +406,100 @@ class SessionMessagesResponse(BaseModel):
     total: int = Field(0, description="Total messages in session (before pagination)")
 
 
+# ── Domain Role Assignments ───────────────────────────────────────────────────
+
+class RoleEvidenceInfo(BaseModel):
+    """Response model: a single evidence item supporting a role assignment."""
+
+    source_id: int = Field(..., description="Tree/source node ID containing this evidence.")
+    observed_role_text: str = Field(..., description="Literal wording from the source document.")
+    evidence_text: Optional[str] = Field(None, description="Short excerpt supporting the role.")
+    language: Optional[str] = Field(None, description="Language code, e.g. 'id', 'en'.")
+    normalization_method: str = Field(..., description="How observed text was mapped to canonical role.")
+    confidence: Optional[float] = Field(None, description="Per-evidence confidence score.")
+
+
+class RoleAssignmentInfo(BaseModel):
+    """Response model: a domain-level role assignment on an entity."""
+
+    assignment_id: str = Field(..., description="Stable UUID for this assignment.")
+    role_name: str = Field(..., description="Canonical role label, e.g. 'President'.")
+    role_id: Optional[str] = Field(None, description="Optional stable vocabulary role identifier.")
+    scope_entity_name: Optional[str] = Field(None, description="Context entity, e.g. 'Indonesia'.")
+    scope_entity_type: Optional[str] = Field(None, description="Type of scope entity, e.g. 'COUNTRY'.")
+    scope_entity_id: Optional[str] = Field(None, description="Optional canonical ID for the scope entity.")
+    start_date: Optional[str] = Field(None, description="Start date in partial ISO format: YYYY, YYYY-MM, or YYYY-MM-DD.")
+    end_date: Optional[str] = Field(None, description="End date in the same format as start_date.")
+    tenure_status: str = Field(..., description="Real-world tenure state: current/former/acting/interim/candidate/unknown.")
+    origin: str = Field(..., description="How the assignment was created: extracted or manual.")
+    review_status: str = Field(..., description="Curation state: suggested/confirmed/disputed/rejected.")
+    confidence: Optional[float] = Field(None, description="Overall assignment confidence score.")
+    normalization_status: str = Field(..., description="Normalization outcome: matched/ambiguous/unresolved/manual_override.")
+    normalization_confidence: Optional[float] = Field(None, description="Confidence of role-name normalization.")
+    source_ids: List[int] = Field(..., description="Supporting tree/source node IDs.")
+    evidence: List[RoleEvidenceInfo] = Field(default_factory=list, description="Evidence items supporting this assignment.")
+
+
+class RoleEvidenceInput(BaseModel):
+    """Input model: evidence item for a new or updated role assignment."""
+
+    source_id: int = Field(..., description="Tree/source node ID containing this evidence.")
+    observed_role_text: str = Field(..., description="Literal wording as it appears in the document.")
+    evidence_text: Optional[str] = Field(None, description="Short excerpt supporting the role.")
+    language: Optional[str] = Field(None, description="Language code, e.g. 'id', 'en'.")
+    normalization_method: str = Field("manual", description="Normalization method used.")
+    confidence: Optional[float] = Field(None, description="Per-evidence confidence score.")
+
+
+class RoleAssignmentInput(BaseModel):
+    """Input model: payload for adding a new role assignment to an entity."""
+
+    role_name: str = Field(..., description="Canonical role label, e.g. 'Koordinator Sektor'.")
+    role_id: Optional[str] = Field(None, description="Optional stable vocabulary role identifier.")
+    scope_entity_name: Optional[str] = Field(None, description="Context entity, e.g. 'Indonesia'.")
+    scope_entity_type: Optional[str] = Field(None, description="Type of scope entity, e.g. 'COUNTRY'.")
+    scope_entity_id: Optional[str] = Field(None, description="Optional canonical ID for the scope entity.")
+    start_date: Optional[str] = Field(None, description="Start date in partial ISO format.")
+    end_date: Optional[str] = Field(None, description="End date in partial ISO format.")
+    tenure_status: str = Field("unknown", description="Tenure state: current/former/acting/interim/candidate/unknown.")
+    source_ids: List[int] = Field(default_factory=list, description="Supporting tree/source node IDs.")
+    evidence: List[RoleEvidenceInput] = Field(default_factory=list, description="Evidence items.")
+
+
+class AddRoleRequest(BaseModel):
+    """Request body for POST /{doc_id}/roles."""
+
+    entity_name: str = Field(..., description="Name of the entity to add the role to.")
+    entity_type: str = Field(..., description="Type of the entity.")
+    role_assignment: RoleAssignmentInput = Field(..., description="Role assignment to add.")
+
+
+class UpdateRoleRequest(BaseModel):
+    """Request body for PATCH /{doc_id}/roles/{assignment_id}."""
+
+    entity_name: str = Field(..., description="Name of the entity owning the assignment.")
+    entity_type: str = Field(..., description="Type of the entity.")
+    role_name: Optional[str] = Field(None, description="Updated canonical role label.")
+    role_id: Optional[str] = Field(None, description="Updated vocabulary role identifier.")
+    scope_entity_name: Optional[str] = Field(None, description="Updated scope entity name.")
+    scope_entity_type: Optional[str] = Field(None, description="Updated scope entity type.")
+    scope_entity_id: Optional[str] = Field(None, description="Updated scope entity canonical ID.")
+    start_date: Optional[str] = Field(None, description="Updated start date.")
+    end_date: Optional[str] = Field(None, description="Updated end date.")
+    tenure_status: Optional[str] = Field(None, description="Updated tenure state.")
+
+
+class ReviewRoleRequest(BaseModel):
+    """Request body for POST /{doc_id}/roles/{assignment_id}/review."""
+
+    entity_name: str = Field(..., description="Name of the entity owning the assignment.")
+    entity_type: str = Field(..., description="Type of the entity.")
+    review_status: str = Field(..., description="New review state: confirmed/disputed/rejected.")
+    role_name: Optional[str] = Field(None, description="Override canonical role label during review.")
+    role_id: Optional[str] = Field(None, description="Override vocabulary role identifier during review.")
+    note: Optional[str] = Field(None, description="Optional internal reviewer note.")
+
+
 # ── Entity Management ─────────────────────────────────────────────────────────
 
 class EntityRef(BaseModel):
@@ -427,6 +521,10 @@ class EntityInfo(BaseModel):
     description: str = Field(..., description="Entity description or canonical summary.")
     source_ids: List[int] = Field(..., description="Source node identifiers supporting this entity.")
     node_name: str = Field(..., description="Underlying graph node name.")
+    role_assignments: List[RoleAssignmentInfo] = Field(
+        default_factory=list,
+        description="Domain-level role assertions for this entity (e.g. President, CEO).",
+    )
 
 
 class EntityListResponse(BaseModel):
