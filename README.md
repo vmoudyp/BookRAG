@@ -26,6 +26,10 @@ This README reflects the **current implementation status in this repository**, n
   - `graph`
   - `mm`
   - `vanilla`
+- **Role-aware GBC answer augmentation** in `Core/rag/gbc_rag.py`
+  - detects role-oriented queries
+  - injects structured role evidence into answer generation when role assignments exist
+  - excludes rejected role assignments from role-context augmentation
 - **FastAPI application** in `api/main.py`
   - auth router
   - tenants router
@@ -36,6 +40,12 @@ This README reflects the **current implementation status in this repository**, n
   - structured JSON logging
   - health endpoint
   - startup recovery for stale indexing jobs
+- **Domain role assignment / curation support** across `Core/Index/Graph.py`, `Core/utils/role_normalizer.py`, and `api/routers/entities.py`
+  - `RoleAssignment` / `RoleEvidence` models attached to entities
+  - extracted vs manual role provenance
+  - review state tracking (`suggested`, `confirmed`, `disputed`, `rejected`)
+  - evidence, source-node IDs, normalization status/confidence, and audit metadata
+  - role listing, review, bulk-review, update, delete, and manual add endpoints
 - **Background indexing service** in `api/services/indexing.py`
 - **Entity editing operations** in the API
   - list entities
@@ -60,6 +70,19 @@ This README reflects the **current implementation status in this repository**, n
 - **Tenant/global cross-document entity resolution**
   - `entity_resolution.enabled: false` by default
   - global VDB sync is implemented but opt-in
+- **Visual sidecar query/fusion**
+  - `visual_sidecar_query_enabled: false` by default
+  - `visual_sidecar_fusion_enabled: false` by default
+  - request-level overrides are supported on `POST /chat/query`
+
+### Implemented, but opt-in unless added/enabled in your active YAML config
+
+- **Automatic domain role extraction during ingestion**
+  - controlled by `graph.role_extraction_enabled`
+  - implemented in `Core/pipelines/kg_extractor.py`
+- **FalkorDB role graph materialization**
+  - controlled by `graph.role_graph_materialization`
+  - role-aware RAG can also fall back to in-memory `role_assignments`
 
 ### Present as docs / design material, not part of the default runtime
 
@@ -80,10 +103,10 @@ This README reflects the **current implementation status in this repository**, n
 
 - `Core/` — indexing, graph, retrieval, and model/provider logic
 - `api/` — FastAPI app, routers, DB helpers, and services
-- `config/` — system configs for different retrieval/index strategies
+- `config/` — system configs for different retrieval/index strategies plus `role_vocab.yaml`
 - `Scripts/` — example run scripts and dataset preprocessing notebooks
 - `Eval/` — evaluation utilities
-- `tests/` — targeted tests for ontology and language-aware document processing
+- `tests/` — focused tests for API docs, chat visual sidecar behavior, HTML/tree handling, role logic, ontology, and language-aware document processing
 - `docs/` — architecture and feature-specific docs
 
 ## Configuration and setup notes
@@ -92,7 +115,10 @@ This README reflects the **current implementation status in this repository**, n
 
 - `config/gbc.yaml` is the most feature-complete example config in the repo.
 - `config/gbc.yaml` currently defaults to `parser: docling`.
+- `config/gbc.yaml` includes current defaults for ontology/entity resolution and visual-sidecar behavior.
 - `config/docling.yaml` documents Docling-specific usage more explicitly.
+- `config/role_vocab.yaml` is the current YAML vocabulary used by role normalization utilities.
+- role extraction flags live on `GraphConfig` (`graph.role_extraction_enabled`, `graph.role_graph_materialization`) and can be added to your active YAML config when needed.
 - `config/default.yaml` is a template with many `TODO` placeholders.
 
 ### Environment / dependencies
@@ -112,9 +138,18 @@ The FastAPI service reads configuration from environment variables. Important on
 - `BOOKRAG_SECRET_KEY` — required; the API will fail fast if it is not set
 - `BOOKRAG_CONFIG_PATH` — defaults to `config/gbc.yaml`
 - `BOOKRAG_MONGO_URI` — defaults to `mongodb://localhost:27017`
-- `BOOKRAG_FALKORDB_HOST` / `BOOKRAG_FALKORDB_PORT`
+- `BOOKRAG_MONGO_PREFIX` / `BOOKRAG_MONGO_SYSTEM_DB`
+- `BOOKRAG_FALKORDB_HOST` / `BOOKRAG_FALKORDB_PORT` / `BOOKRAG_FALKORDB_USERNAME` / `BOOKRAG_FALKORDB_PASSWORD`
 - `BOOKRAG_UPLOAD_DIR` — defaults to `./uploads`
 - `BOOKRAG_INDEX_DIR` — defaults to `./indices`
+- `BOOKRAG_ROLE_VOCAB` — optional override path for `config/role_vocab.yaml`
+- `BOOKRAG_CORS_ORIGINS` — comma-separated allowed origins for the API
+- `BOOKRAG_LOG_LEVEL` — defaults to `INFO`
+- `BOOKRAG_MAX_UPLOAD_MB` — upload size limit for `POST /documents`
+- `BOOKRAG_TOKEN_EXPIRE` / `BOOKRAG_REFRESH_TOKEN_DAYS`
+- `BOOKRAG_THREAD_POOL_SIZE`, `BOOKRAG_GBC_CACHE_TTL`, and `BOOKRAG_GBC_CACHE_MAX` for service/runtime tuning
+
+`api/main.py` also calls `load_dotenv()`, so a local `.env` file is read before startup config is validated.
 
 ## CLI workflow
 
@@ -201,7 +236,18 @@ Implemented router surface:
 - `GET /chat/sessions`
 - `GET /chat/sessions/{session_id}/messages`
 - `DELETE /chat/sessions/{session_id}`
-- entity management under `/entities/{doc_id}`
+- `GET /entities/{doc_id}`
+- `PATCH /entities/{doc_id}/rename`
+- `POST /entities/{doc_id}/merge`
+- `POST /entities/{doc_id}/split`
+- `GET /entities/{doc_id}/suggestions`
+- `POST /entities/{doc_id}/roles`
+- `GET /entities/{doc_id}/roles`
+- `PATCH /entities/{doc_id}/roles/{assignment_id}`
+- `POST /entities/{doc_id}/roles/{assignment_id}/review`
+- `DELETE /entities/{doc_id}/roles/{assignment_id}`
+- `POST /entities/{doc_id}/roles/bulk-review`
+- `GET /health`
 
 Notable current API capabilities:
 
@@ -211,6 +257,7 @@ Notable current API capabilities:
 - cross-document chat mode
 - document access filtering
 - editable entity graph operations
+- role curation export and batch review workflows
 - `/health` endpoint with MongoDB and optional FalkorDB checks
 
 ### Document upload metadata
@@ -356,6 +403,32 @@ The chat router also exposes session/history endpoints under `/chat/sessions`.
   - deletes a session and its messages
   - allowed for the session owner or an admin
 
+### Role assignments and curation workflow
+
+Entities may carry structured domain role assignments such as political offices, organizational positions, or executive titles.
+
+Current role-assignment shape includes fields such as:
+
+- `assignment_id`
+- `role_name` and optional stable `role_id`
+- scope metadata (`scope_entity_name`, `scope_entity_type`, `scope_entity_id`)
+- temporal metadata (`start_date`, `end_date`, `tenure_status`)
+- workflow metadata (`origin`, `review_status`, `normalization_status`, `normalization_confidence`)
+- evidence/source trace (`source_ids`, `evidence`)
+- audit metadata (`created_by`, `updated_by`, `created_at`, `updated_at`)
+
+Current workflow support:
+
+- LLM extraction can create `origin="extracted"`, `review_status="suggested"` assignments during ingestion when role extraction is enabled
+- reviewers can confirm / dispute / reject assignments and optionally override canonical `role_name` / `role_id`
+- bulk review supports partial success reporting per item
+- role export supports filtering by `review_status` and `entity_type`
+- role-name normalization utilities use the YAML vocabulary in `config/role_vocab.yaml`
+
+Operational note:
+
+- `TODONEXT.md` currently tracks follow-up work for role re-normalization, router functional tests, role stats, vocab cache invalidation, tenure-aware filtering, and vocabulary management APIs
+
 ## Ontology and cross-document resolution
 
 Ontology and entity-resolution support are real parts of the current codebase, but they are **not enabled by default**.
@@ -389,15 +462,30 @@ bash Scripts/example-eval.sh
 
 The checked-in test suite is focused and confirms several recent implementation details, including:
 
+- role assignment merge/CRUD/review logic and extraction helpers
+- chat visual-sidecar config propagation and router request handling
+- documents router metadata and OpenAPI behavior
+- remaining router OpenAPI documentation coverage
+- HTML/JSON document-tree and visual-sidecar processing behavior
 - ontology integration
 - language-aware PDF paragraph refinement
 - legal heading detection / language detection
 
 Current test files:
 
+- `tests/test_chat_router_visual_sidecar.py`
+- `tests/test_chat_service_visual_sidecar.py`
+- `tests/test_doc_tree_builder_html.py`
+- `tests/test_documents_router_openapi.py`
+- `tests/test_entity_roles.py`
 - `tests/test_ontology_integration.py`
 - `tests/test_pdf_refiner_lang.py`
 - `tests/test_legal_heading_detector.py`
+- `tests/test_remaining_routers_openapi.py`
+
+Current testing gap worth knowing:
+
+- the newer `GET /entities/{doc_id}/roles` and `POST /entities/{doc_id}/roles/bulk-review` router paths have OpenAPI/schema coverage and service-level logic coverage, but not dedicated functional router tests yet
 
 ## Dataset format
 
@@ -428,7 +516,9 @@ See preprocessing examples under `Scripts/preprocess/`.
 ## Additional docs
 
 - `docs/bookrag-architecture-review.md` — architecture review and implementation analysis
+- `docs/gemini-leaf-embedding-design.md` — notes on Gemini leaf embedding design
 - `docs/ontology-usage-guide.md` — ontology and global resolution notes
 - `docs/research-behavior-detection.md` — research-oriented notes
+- `TODONEXT.md` — short near-term backlog for the next high-value improvements
 
 If you are trying to understand what is implemented **right now**, prefer the code entrypoints plus this README over older paper-era setup text.

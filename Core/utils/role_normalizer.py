@@ -25,24 +25,137 @@ log = logging.getLogger(__name__)
 _DEFAULT_VOCAB_PATH = Path(__file__).resolve().parents[2] / "config" / "role_vocab.yaml"
 
 
-@lru_cache(maxsize=1)
-def _load_vocab(path: str) -> list[dict]:
-    """Load and cache the role vocabulary from YAML."""
+def _prepare_role_entry(entry: dict) -> dict:
+    """Normalize a raw YAML role entry into a validated runtime form."""
+    role_id = str(entry.get("role_id", "")).strip()
+    canonical = str(entry.get("canonical", "")).strip()
+    if not role_id:
+        raise ValueError("role_id is required")
+    if not canonical:
+        raise ValueError("canonical is required")
+
+    aliases = entry.get("aliases") or []
+    cleaned_aliases: list[str] = []
+    seen_aliases: set[str] = set()
+    for alias in aliases:
+        alias_text = str(alias).strip()
+        if not alias_text:
+            continue
+        alias_lower = alias_text.lower()
+        if alias_lower == canonical.lower() or alias_lower in seen_aliases:
+            continue
+        seen_aliases.add(alias_lower)
+        cleaned_aliases.append(alias_text)
+
+    prepared = {
+        "role_id": role_id,
+        "canonical": canonical,
+        "aliases": cleaned_aliases,
+    }
+    prepared["_canonical_lower"] = canonical.lower()
+    prepared["_aliases_lower"] = [alias.lower() for alias in cleaned_aliases]
+    return prepared
+
+
+def _serialize_role_entry(entry: dict) -> dict:
+    """Strip runtime-only fields before persisting to YAML."""
+    return {
+        "role_id": entry["role_id"],
+        "canonical": entry["canonical"],
+        "aliases": list(entry.get("aliases") or []),
+    }
+
+
+def _read_vocab_file(path: str) -> list[dict]:
     import yaml  # optional dependency; only needed at normalizer call time
 
     with open(path, encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
-    roles = data.get("roles", [])
-    # Pre-compute lower-cased lookup sets for fast matching
-    for entry in roles:
-        entry["_canonical_lower"] = entry["canonical"].lower()
-        entry["_aliases_lower"] = [a.lower() for a in entry.get("aliases", [])]
+        data = yaml.safe_load(fh) or {}
+    roles = data.get("roles", []) or []
+    return [_prepare_role_entry(entry) for entry in roles]
+
+
+def _write_vocab_file(path: str, roles: list[dict]) -> None:
+    import yaml  # optional dependency; only needed at normalizer call time
+
+    payload = {"roles": [_serialize_role_entry(entry) for entry in roles]}
+    with open(path, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(payload, fh, sort_keys=False, allow_unicode=True)
+
+
+@lru_cache(maxsize=1)
+def _load_vocab(path: str) -> list[dict]:
+    """Load and cache the role vocabulary from YAML."""
+    roles = _read_vocab_file(path)
     log.info("Loaded %d role vocabulary entries from %s", len(roles), path)
     return roles
 
 
 def _vocab_path() -> str:
     return os.environ.get("BOOKRAG_ROLE_VOCAB", str(_DEFAULT_VOCAB_PATH))
+
+
+def list_vocab_entries(*, vocab_path: Optional[str] = None) -> list[dict]:
+    """Return vocabulary entries without runtime-only cache fields."""
+    path = vocab_path or _vocab_path()
+    return [_serialize_role_entry(entry) for entry in _load_vocab(path)]
+
+
+def reload_vocab(*, vocab_path: Optional[str] = None) -> list[dict]:
+    """Clear the cached vocabulary and return the freshly loaded entries."""
+    path = vocab_path or _vocab_path()
+    _load_vocab.cache_clear()
+    return list_vocab_entries(vocab_path=path)
+
+
+def add_vocab_entry(
+    role_id: str,
+    canonical: str,
+    aliases: Optional[list[str]] = None,
+    *,
+    vocab_path: Optional[str] = None,
+) -> dict:
+    """Add a new vocabulary entry and reload the cache."""
+    path = vocab_path or _vocab_path()
+    roles = _read_vocab_file(path)
+    if any(entry["role_id"] == role_id for entry in roles):
+        raise ValueError(f"Role vocabulary entry '{role_id}' already exists.")
+
+    roles.append(_prepare_role_entry({
+        "role_id": role_id,
+        "canonical": canonical,
+        "aliases": aliases or [],
+    }))
+    roles.sort(key=lambda item: item["canonical"].lower())
+    _write_vocab_file(path, roles)
+    reload_vocab(vocab_path=path)
+    return {"role_id": role_id, "canonical": canonical.strip(), "aliases": list(aliases or [])}
+
+
+def update_vocab_entry(
+    role_id: str,
+    *,
+    canonical: Optional[str] = None,
+    aliases: Optional[list[str]] = None,
+    vocab_path: Optional[str] = None,
+) -> dict:
+    """Update an existing vocabulary entry and reload the cache."""
+    path = vocab_path or _vocab_path()
+    roles = _read_vocab_file(path)
+    for idx, entry in enumerate(roles):
+        if entry["role_id"] != role_id:
+            continue
+        updated = _prepare_role_entry({
+            "role_id": role_id,
+            "canonical": canonical if canonical is not None else entry["canonical"],
+            "aliases": aliases if aliases is not None else entry.get("aliases", []),
+        })
+        roles[idx] = updated
+        roles.sort(key=lambda item: item["canonical"].lower())
+        _write_vocab_file(path, roles)
+        reload_vocab(vocab_path=path)
+        return _serialize_role_entry(updated)
+    raise KeyError(f"Role vocabulary entry '{role_id}' not found.")
 
 
 def normalize_role(

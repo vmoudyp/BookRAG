@@ -15,8 +15,13 @@ from api.models.requests import (
     SuggestMergesResponse, MergeSuggestion, EntityRef,
     AddRoleRequest, UpdateRoleRequest, ReviewRoleRequest,
     RoleListResponse, BulkReviewRolesRequest, BulkReviewRolesResponse,
+    ReNormalizeRolesRequest, ReNormalizeRolesResponse,
+    RoleStatsResponse,
+    RoleVocabularyEntryInfo, RoleVocabularyListResponse,
+    CreateRoleVocabularyEntryRequest, UpdateRoleVocabularyEntryRequest,
+    RoleVocabularyMutationResponse, RoleVocabularyReloadResponse,
 )
-from api.dependencies import get_current_user, check_doc_access
+from api.dependencies import get_current_user, check_doc_access, require_admin
 import api.services.entity_editor as svc
 
 log = logging.getLogger(__name__)
@@ -28,6 +33,136 @@ CONFIG_PATH = os.getenv("BOOKRAG_CONFIG_PATH", "config/gbc.yaml")
 async def _require_access(tenant_id: str, user_id: str, doc_id: str):
     if not await check_doc_access(user_id, tenant_id, doc_id):
         raise HTTPException(status_code=403, detail="Access denied to this document")
+
+
+# ── Role vocabulary admin APIs ────────────────────────────────────────────────
+
+@router.get(
+    "/role-vocab",
+    response_model=RoleVocabularyListResponse,
+    summary="List curated role vocabulary",
+    description="Return the current canonical role vocabulary and aliases. Admin only.",
+    responses={
+        403: {"description": "Admin access required."},
+        500: {"description": "Role vocabulary listing failed."},
+    },
+)
+async def list_role_vocabulary(current_user: dict = Depends(require_admin)):
+    """Return all curated role vocabulary entries."""
+    try:
+        roles = await svc.list_role_vocab()
+    except Exception as exc:
+        log.exception(f"list_role_vocabulary failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return RoleVocabularyListResponse(
+        total=len(roles),
+        roles=[RoleVocabularyEntryInfo(**role) for role in roles],
+    )
+
+
+@router.post(
+    "/role-vocab",
+    response_model=RoleVocabularyMutationResponse,
+    summary="Create a curated role vocabulary entry",
+    description="Create one canonical role vocabulary entry plus aliases. Admin only.",
+    responses={
+        400: {"description": "Invalid or duplicate role vocabulary entry."},
+        403: {"description": "Admin access required."},
+        500: {"description": "Role vocabulary creation failed."},
+    },
+)
+async def create_role_vocabulary_entry(
+    req: CreateRoleVocabularyEntryRequest,
+    current_user: dict = Depends(require_admin),
+):
+    """Create one curated role vocabulary entry."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+
+    try:
+        role = await svc.create_role_vocab_entry(tenant_id, req.model_dump(), user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        log.exception(f"create_role_vocabulary_entry failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return RoleVocabularyMutationResponse(
+        success=True,
+        message=f"Created role vocabulary entry '{role['role_id']}'.",
+        role=RoleVocabularyEntryInfo(**role),
+    )
+
+
+@router.patch(
+    "/role-vocab/{role_id}",
+    response_model=RoleVocabularyMutationResponse,
+    summary="Update a curated role vocabulary entry",
+    description="Update the canonical label and/or aliases for one role vocabulary entry. Admin only.",
+    responses={
+        400: {"description": "Invalid role vocabulary update."},
+        403: {"description": "Admin access required."},
+        404: {"description": "Role vocabulary entry not found."},
+        422: {"description": "At least one field must be provided."},
+        500: {"description": "Role vocabulary update failed."},
+    },
+)
+async def update_role_vocabulary_entry(
+    role_id: str,
+    req: UpdateRoleVocabularyEntryRequest,
+    current_user: dict = Depends(require_admin),
+):
+    """Update one curated role vocabulary entry."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    update_fields = req.model_dump(exclude_none=True)
+    if not update_fields:
+        raise HTTPException(status_code=422, detail="Provide at least one field to update")
+
+    try:
+        role = await svc.update_role_vocab_entry(tenant_id, role_id, update_fields, user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        log.exception(f"update_role_vocabulary_entry failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return RoleVocabularyMutationResponse(
+        success=True,
+        message=f"Updated role vocabulary entry '{role_id}'.",
+        role=RoleVocabularyEntryInfo(**role),
+    )
+
+
+@router.post(
+    "/role-vocab/reload",
+    response_model=RoleVocabularyReloadResponse,
+    summary="Reload the curated role vocabulary",
+    description="Invalidate and reload the cached role vocabulary from disk. Admin only.",
+    responses={
+        403: {"description": "Admin access required."},
+        500: {"description": "Role vocabulary reload failed."},
+    },
+)
+async def reload_role_vocabulary(current_user: dict = Depends(require_admin)):
+    """Reload the cached role vocabulary from disk."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+
+    try:
+        roles = await svc.reload_role_vocab(tenant_id, user_id)
+    except Exception as exc:
+        log.exception(f"reload_role_vocabulary failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return RoleVocabularyReloadResponse(
+        success=True,
+        message="Reloaded role vocabulary.",
+        total=len(roles),
+    )
 
 
 # ── List ──────────────────────────────────────────────────────────────────────
@@ -475,6 +610,85 @@ async def bulk_review_role_assignments(
         processed=ok,
         errors=errs,
     )
+
+
+@router.post(
+    "/{doc_id}/roles/re-normalize",
+    response_model=ReNormalizeRolesResponse,
+    summary="Re-normalize extracted role assignments",
+    description=(
+        "Re-apply canonical role normalization across existing role assignments in the document, "
+        "optionally restricted by review_status and/or entity_type. Manual overrides and "
+        "curator-locked confirmed assignments are skipped."
+    ),
+    responses={
+        403: {"description": "Access denied to this document."},
+        500: {"description": "Internal server error."},
+    },
+)
+async def re_normalize_role_assignments(
+    doc_id: str,
+    req: ReNormalizeRolesRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Re-run canonical role normalization for existing assignments."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    try:
+        result = await svc.re_normalize_roles(
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            config_path=CONFIG_PATH,
+            user_id=user_id,
+            review_status=req.review_status,
+            entity_type=req.entity_type,
+        )
+    except Exception as exc:
+        log.exception(f"re_normalize_role_assignments failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return ReNormalizeRolesResponse(
+        success=True,
+        message=(
+            f"Re-normalized {result['updated']} assignment(s) out of {result['processed']} "
+            f"processed; skipped {result['skipped']}."
+        ),
+        **result,
+    )
+
+
+@router.get(
+    "/{doc_id}/roles/stats",
+    response_model=RoleStatsResponse,
+    summary="Get role curation statistics",
+    description="Return coverage and status breakdowns for role assignments in the document.",
+    responses={
+        403: {"description": "Access denied to this document."},
+        500: {"description": "Internal server error."},
+    },
+)
+async def get_role_assignment_stats(
+    doc_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return document-level role coverage and curation statistics."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    try:
+        stats = await svc.role_stats(
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            config_path=CONFIG_PATH,
+        )
+    except Exception as exc:
+        log.exception(f"get_role_assignment_stats failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return RoleStatsResponse(**stats)
 
 
 # ── Suggest merges ────────────────────────────────────────────────────────────

@@ -82,6 +82,8 @@ _add_role_sync = _svc_mod._add_role_sync
 _update_role_sync = _svc_mod._update_role_sync
 _review_role_sync = _svc_mod._review_role_sync
 _delete_role_sync = _svc_mod._delete_role_sync
+_re_normalize_roles_sync = _svc_mod._re_normalize_roles_sync
+_role_stats_sync = _svc_mod._role_stats_sync
 _split_sync = _svc_mod._split_sync
 
 
@@ -359,6 +361,130 @@ class TestDeleteRoleSync:
         with patch.object(_svc_mod, "_load_graph_sync", return_value=(mock_g, "/tmp", None)):
             with pytest.raises(KeyError):
                 _delete_role_sync("t", "d", "cfg", entity.entity_name, entity.entity_type, "MISSING")
+
+
+# ── _re_normalize_roles_sync / _role_stats_sync ───────────────────────────────
+
+class TestReNormalizeRolesSync:
+
+    def test_updates_only_non_locked_assignments_and_persists_graph(self):
+        target = _ra("Minister", assignment_id="ra-001")
+        manual_override = _ra("Custom", assignment_id="ra-002", review_status="confirmed", origin="manual")
+        manual_override = manual_override.model_copy(update={"normalization_status": "manual_override"})
+        locked = _ra("President", assignment_id="ra-003", role_id="role:president", review_status="confirmed")
+        entity = _entity("Alice", role_assignments=[target, manual_override, locked])
+
+        captured = []
+        graph = MagicMock()
+        graph.get_all_nodes.return_value = ["Alice_PERSON"]
+        graph.get_entity_by_node_name.return_value = entity
+        graph.update_entity.side_effect = lambda n, t, e: captured.append(e)
+
+        def fake_apply(assignment):
+            if assignment.assignment_id != "ra-001":
+                return assignment
+            return assignment.model_copy(update={
+                "role_id": "role:minister",
+                "normalization_status": "matched",
+            })
+
+        with patch.object(_svc_mod, "_load_graph_sync", return_value=(graph, "/tmp", None)):
+            with patch("Core.utils.role_normalizer.apply_normalization", side_effect=fake_apply):
+                result = _re_normalize_roles_sync("tenant-a", "doc-1", "cfg", "user-1")
+
+        assert result == {
+            "doc_id": "doc-1",
+            "processed": 1,
+            "updated": 1,
+            "skipped": 2,
+            "unresolved": 0,
+        }
+        graph.save_graph.assert_called_once()
+        assert len(captured) == 1
+        updated = {ra.assignment_id: ra for ra in captured[0].role_assignments}
+        assert updated["ra-001"].role_id == "role:minister"
+        assert updated["ra-001"].normalization_status == "matched"
+        assert updated["ra-001"].updated_by == "user-1"
+        assert updated["ra-002"].normalization_status == "manual_override"
+        assert updated["ra-003"].role_id == "role:president"
+
+    def test_honors_entity_type_filter(self):
+        person = _entity("Alice", role_assignments=[_ra("Minister", assignment_id="ra-001")])
+        org = Entity(
+            entity_name="Cabinet",
+            entity_type="ORG",
+            source_ids={1},
+            role_assignments=[_ra("Coalition Lead", assignment_id="ra-002")],
+        )
+        graph = MagicMock()
+        graph.get_all_nodes.return_value = ["Alice_PERSON", "Cabinet_ORG"]
+        graph.get_entity_by_node_name.side_effect = lambda node: {
+            "Alice_PERSON": person,
+            "Cabinet_ORG": org,
+        }[node]
+
+        with patch.object(_svc_mod, "_load_graph_sync", return_value=(graph, "/tmp", None)):
+            with patch(
+                "Core.utils.role_normalizer.apply_normalization",
+                side_effect=lambda ra: ra.model_copy(update={"role_id": "matched", "normalization_status": "matched"}),
+            ):
+                result = _re_normalize_roles_sync(
+                    "tenant-a", "doc-1", "cfg", "user-1", entity_type="PERSON"
+                )
+
+        assert result["processed"] == 1
+        graph.update_entity.assert_called_once()
+        update_args = graph.update_entity.call_args[0]
+        assert update_args[0] == "Alice"
+        assert update_args[1] == "PERSON"
+
+
+class TestRoleStatsSync:
+
+    def test_aggregates_document_role_counts(self):
+        graph = MagicMock()
+        graph.get_all_nodes.return_value = ["n1", "n2", "n3", "n4"]
+        rows = [
+            {
+                "entity_name": "Alice",
+                "entity_type": "PERSON",
+                "review_status": "confirmed",
+                "normalization_status": "matched",
+                "origin": "manual",
+                "tenure_status": "current",
+            },
+            {
+                "entity_name": "Alice",
+                "entity_type": "PERSON",
+                "review_status": "confirmed",
+                "normalization_status": "matched",
+                "origin": "manual",
+                "tenure_status": "current",
+            },
+            {
+                "entity_name": "Bob",
+                "entity_type": "PERSON",
+                "review_status": "suggested",
+                "normalization_status": "unresolved",
+                "origin": "extracted",
+                "tenure_status": "former",
+            },
+        ]
+
+        with patch.object(_svc_mod, "_load_graph_sync", return_value=(graph, "/tmp", None)):
+            with patch.object(_svc_mod, "_list_roles_sync", return_value=rows):
+                result = _role_stats_sync("tenant-a", "doc-9", "cfg")
+
+        assert result["doc_id"] == "doc-9"
+        assert result["total_entities"] == 4
+        assert result["entities_with_roles"] == 2
+        assert result["coverage_ratio"] == 0.5
+        assert result["total_roles"] == 3
+        assert result["unresolved_roles"] == 1
+        assert result["review_status_counts"] == {"confirmed": 2, "suggested": 1}
+        assert result["normalization_status_counts"] == {"matched": 2, "unresolved": 1}
+        assert result["origin_counts"] == {"manual": 2, "extracted": 1}
+        assert result["tenure_status_counts"] == {"current": 2, "former": 1}
 
 
 # ── _split_sync conservative propagation ─────────────────────────────────────

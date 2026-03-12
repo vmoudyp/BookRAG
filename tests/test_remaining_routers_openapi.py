@@ -81,6 +81,14 @@ def _install_base_modules(monkeypatch):
     fake_entity_editor.merge_entities = fake_noop
     fake_entity_editor.split_entity = fake_noop
     fake_entity_editor.suggest_merges = fake_noop
+    fake_entity_editor.list_roles = fake_noop
+    fake_entity_editor.bulk_review_roles = fake_noop
+    fake_entity_editor.re_normalize_roles = fake_noop
+    fake_entity_editor.role_stats = fake_noop
+    fake_entity_editor.list_role_vocab = fake_noop
+    fake_entity_editor.create_role_vocab_entry = fake_noop
+    fake_entity_editor.update_role_vocab_entry = fake_noop
+    fake_entity_editor.reload_role_vocab = fake_noop
     fake_services.entity_editor = fake_entity_editor
 
     fake_routers = ModuleType("api.routers")
@@ -186,6 +194,30 @@ def test_entities_router_openapi_includes_operation_docs_and_examples(monkeypatc
     assert suggestions_op["summary"] == "Suggest entity merges"
     params = {param["name"]: param for param in suggestions_op["parameters"]}
     assert "Minimum similarity score" in params["min_score"]["description"]
+
+    role_list_op = schema["paths"]["/entities/{doc_id}/roles"]["get"]
+    assert role_list_op["summary"] == "List role assignments"
+
+    bulk_review_op = schema["paths"]["/entities/{doc_id}/roles/bulk-review"]["post"]
+    assert bulk_review_op["summary"] == "Bulk-review role assignments"
+
+    renorm_op = schema["paths"]["/entities/{doc_id}/roles/re-normalize"]["post"]
+    assert renorm_op["summary"] == "Re-normalize extracted role assignments"
+
+    stats_op = schema["paths"]["/entities/{doc_id}/roles/stats"]["get"]
+    assert stats_op["summary"] == "Get role curation statistics"
+
+    vocab_list_op = schema["paths"]["/entities/role-vocab"]["get"]
+    assert vocab_list_op["summary"] == "List curated role vocabulary"
+
+    vocab_reload_op = schema["paths"]["/entities/role-vocab/reload"]["post"]
+    assert vocab_reload_op["summary"] == "Reload the curated role vocabulary"
+
+    renorm_schema = schema["components"]["schemas"]["ReNormalizeRolesRequest"]
+    assert "review_status" in renorm_schema["properties"]
+
+    vocab_schema = schema["components"]["schemas"]["RoleVocabularyMutationResponse"]
+    assert vocab_schema["properties"]["role"]["$ref"].endswith("/RoleVocabularyEntryInfo")
 
     operation_schema = schema["components"]["schemas"]["EntityOperationResponse"]
     assert operation_schema["examples"][0]["success"] is True

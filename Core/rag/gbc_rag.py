@@ -43,6 +43,92 @@ import logging
 log = logging.getLogger(__name__)
 
 
+_ROLE_QUERY_PATTERNS = re.compile(
+    r"\b("
+    r"who (is|was|are|were|holds?|held|serves? as|served as)|"
+    r"what (role|position|title|post) (does|did|do)|"
+    r"which (person|entity|organization|official|minister|director|head)|"
+    r"role of|position of|title of|"
+    r"minister|president|governor|director|chairman|secretary|ambassador|"
+    r"ceo|chief executive|head of|commissioner"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_EXPLICIT_CURRENT_TENURE_QUERY_PATTERNS = re.compile(
+    r"\b(current|currently|incumbent|today|now|present-day|present)\b",
+    re.IGNORECASE,
+)
+
+_EXPLICIT_FORMER_TENURE_QUERY_PATTERNS = re.compile(
+    r"\b(former|previous|past|prior|formerly)\b|(?:\bex[- ])",
+    re.IGNORECASE,
+)
+
+_CURRENT_TENURE_QUERY_PATTERNS = re.compile(
+    r"\b(who is|who are|holds?|hold|serves? as|serving as)\b",
+    re.IGNORECASE,
+)
+
+_FORMER_TENURE_QUERY_PATTERNS = re.compile(
+    r"\b(who was|who were|held|served as|used to be)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_role_query_text(query: str) -> bool:
+    """Return True when *query* appears to ask about a role or title."""
+    return bool(_ROLE_QUERY_PATTERNS.search(query or ""))
+
+
+def _infer_role_tenure_intent(query: str) -> Optional[str]:
+    """Infer whether a role-oriented query is asking about current or former holders."""
+    if not _is_role_query_text(query):
+        return None
+    if _EXPLICIT_FORMER_TENURE_QUERY_PATTERNS.search(query or ""):
+        return "former"
+    if _EXPLICIT_CURRENT_TENURE_QUERY_PATTERNS.search(query or ""):
+        return "current"
+
+    has_current = bool(_CURRENT_TENURE_QUERY_PATTERNS.search(query or ""))
+    has_former = bool(_FORMER_TENURE_QUERY_PATTERNS.search(query or ""))
+    if has_current and not has_former:
+        return "current"
+    if has_former and not has_current:
+        return "former"
+    return None
+
+
+def _matches_role_tenure_intent(
+    tenure_status: Optional[str],
+    intent: Optional[str],
+) -> bool:
+    """Return True when a role assignment's tenure is compatible with the query intent."""
+    if intent not in {"current", "former"}:
+        return True
+
+    normalized = (tenure_status or "").strip().lower()
+    if intent == "current":
+        if normalized in {"", "unknown"}:
+            return True
+        return normalized in {"current", "acting", "interim"}
+
+    return normalized in {"former", "past", "previous"}
+
+
+def _filter_role_evidence_by_tenure(
+    role_evidence: List[Dict[str, Any]],
+    intent: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Filter structured role evidence by inferred current/former intent."""
+    if not role_evidence or intent not in {"current", "former"}:
+        return role_evidence
+    return [
+        item for item in role_evidence
+        if _matches_role_tenure_intent(item.get("tenure_status"), intent)
+    ]
+
+
 class GBCRAG(BaseRAG):
     """
     GBC RAG (Graph-Based Contextual Retrieval Augmented Generation) class.
@@ -618,21 +704,9 @@ class GBCRAG(BaseRAG):
     #  Role-aware retrieval helpers                                        #
     # ------------------------------------------------------------------ #
 
-    _ROLE_QUERY_PATTERNS = re.compile(
-        r"\b("
-        r"who (is|was|are|were|holds?|held|serves? as|served as)|"
-        r"what (role|position|title|post) (does|did|do)|"
-        r"which (person|entity|organization|official|minister|director|head)|"
-        r"role of|position of|title of|"
-        r"minister|president|governor|director|chairman|secretary|ambassador|"
-        r"ceo|chief executive|head of|commissioner"
-        r")\b",
-        re.IGNORECASE,
-    )
-
     def _is_role_query(self, query: str) -> bool:
         """Return True if the query appears to be asking about a person's role or title."""
-        return bool(self._ROLE_QUERY_PATTERNS.search(query))
+        return _is_role_query_text(query)
 
     def _query_role_context(
         self, sub_query: str, entity_node_names: List[str]
@@ -648,6 +722,7 @@ class GBCRAG(BaseRAG):
             review_status, start_date, end_date, confidence, evidence_text
         """
         evidence: List[Dict[str, Any]] = []
+        tenure_intent = _infer_role_tenure_intent(sub_query)
 
         graph_index = self.gbc_index.GraphIndex
 
@@ -690,11 +765,13 @@ class GBCRAG(BaseRAG):
                         "confidence": float(conf or 0.0),
                         "evidence_text": "",
                     })
+                filtered = _filter_role_evidence_by_tenure(evidence, tenure_intent)
                 log.info(
-                    f"Role context: FalkorDB returned {len(evidence)} role record(s) "
-                    f"for {len(entity_node_names)} entity node(s)."
+                    f"Role context: FalkorDB returned {len(filtered)} role record(s) "
+                    f"for {len(entity_node_names)} entity node(s)"
+                    f" (tenure_intent={tenure_intent or 'any'})."
                 )
-                return evidence
+                return filtered
             except Exception as exc:
                 log.warning(f"FalkorDB HAS_ROLE query failed, falling back to in-memory: {exc}")
 
@@ -725,11 +802,13 @@ class GBCRAG(BaseRAG):
                     "evidence_text": ev_text,
                 })
 
+        filtered = _filter_role_evidence_by_tenure(evidence, tenure_intent)
         log.info(
-            f"Role context: in-memory graph returned {len(evidence)} role record(s) "
-            f"for {len(entity_node_names)} entity node(s)."
+            f"Role context: in-memory graph returned {len(filtered)} role record(s) "
+            f"for {len(entity_node_names)} entity node(s)"
+            f" (tenure_intent={tenure_intent or 'any'})."
         )
-        return evidence
+        return filtered
 
     @staticmethod
     def _enrich_entities_with_roles(

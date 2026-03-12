@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
 
@@ -34,6 +34,9 @@ _doc_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 # in quick succession on the same document.
 _rebuild_pending: set[str] = set()
 _rebuild_pending_lock = asyncio.Lock()
+
+# Global lock for shared vocabulary-file mutations.
+_role_vocab_lock = asyncio.Lock()
 
 
 def _get_lock(tenant_id: str, doc_id: str) -> asyncio.Lock:
@@ -152,6 +155,17 @@ async def list_entities(tenant_id: str, doc_id: str, config_path: str) -> List[d
     return await loop.run_in_executor(
         _executor, _list_entities_sync, tenant_id, doc_id, config_path
     )
+
+
+def _serialize_entity(graph, entity) -> dict:
+    return {
+        "entity_name": entity.entity_name,
+        "entity_type": entity.entity_type,
+        "description": entity.description,
+        "source_ids": sorted(entity.source_ids),
+        "node_name": graph.get_node_name_from_entity(entity),
+        "role_assignments": [ra.model_dump() for ra in entity.role_assignments],
+    }
 
 
 # ── Rename entity ─────────────────────────────────────────────────────────────
@@ -828,9 +842,13 @@ def _bulk_review_roles_sync(
 
     Returns ``{"processed": int, "errors": list[dict]}``.
     """
-    graph, save_path, falkordb_cfg = _load_graph_sync(tenant_id, doc_id, config_path)
+    from datetime import datetime, timezone
+    from Core.Index.Graph import Entity, RoleAssignment
+
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
     processed = 0
     errors: List[dict] = []
+    now = datetime.now(timezone.utc).isoformat()
 
     for item in reviews:
         ent_name = item["entity_name"]
@@ -843,15 +861,26 @@ def _bulk_review_roles_sync(
         try:
             entity = graph.get_entity(ent_name, ent_type)
             found = False
+            new_roles = []
             for ra in entity.role_assignments:
-                if ra.assignment_id == assignment_id:
-                    ra.review_status = new_status
-                    if override_name:
-                        ra.role_name = override_name
-                    if override_id:
-                        ra.role_id = override_id
-                    found = True
-                    break
+                if ra.assignment_id != assignment_id:
+                    new_roles.append(ra)
+                    continue
+
+                found = True
+                overrides = {
+                    "review_status": new_status,
+                    "updated_by": user_id,
+                    "updated_at": now,
+                }
+                if override_name is not None:
+                    overrides["role_name"] = override_name
+                    overrides["normalization_status"] = "manual_override"
+                if override_id is not None:
+                    overrides["role_id"] = override_id
+                    overrides["normalization_status"] = "manual_override"
+                new_roles.append(RoleAssignment(**{**ra.model_dump(), **overrides}))
+
             if not found:
                 errors.append({
                     "assignment_id": assignment_id,
@@ -859,7 +888,8 @@ def _bulk_review_roles_sync(
                     "error": "assignment_id not found",
                 })
                 continue
-            graph.update_entity(ent_name, ent_type, entity)
+            updated_entity = Entity(**{**entity.model_dump(), "role_assignments": new_roles})
+            graph.update_entity(ent_name, ent_type, updated_entity)
             processed += 1
         except KeyError:
             errors.append({
@@ -875,7 +905,7 @@ def _bulk_review_roles_sync(
             })
 
     if processed:
-        graph.save_to_dir(save_path)
+        graph.save_graph()
 
     return {"processed": processed, "errors": errors}
 
@@ -905,6 +935,235 @@ async def bulk_review_roles(
     await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
         "operation": "bulk_review_roles", "doc_id": doc_id, "user_id": user_id,
         "processed": result["processed"],
+    })
+    return result
+
+
+def _re_normalize_roles_sync(
+    tenant_id: str,
+    doc_id: str,
+    config_path: str,
+    user_id: str,
+    review_status: Optional[str] = None,
+    entity_type: Optional[str] = None,
+) -> dict:
+    from datetime import datetime, timezone
+    from Core.Index.Graph import Entity
+    from Core.utils.role_normalizer import apply_normalization
+
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    processed = 0
+    updated = 0
+    skipped = 0
+    unresolved = 0
+    graph_changed = False
+    now = datetime.now(timezone.utc).isoformat()
+
+    for node_name in list(graph.get_all_nodes()):
+        entity = graph.get_entity_by_node_name(node_name)
+        if entity_type and entity.entity_type.upper() != entity_type.upper():
+            continue
+
+        entity_changed = False
+        new_roles = []
+        for assignment in entity.role_assignments:
+            if review_status and assignment.review_status != review_status:
+                new_roles.append(assignment)
+                continue
+
+            if assignment.normalization_status == "manual_override" or (
+                assignment.review_status == "confirmed" and assignment.role_id
+            ):
+                skipped += 1
+                new_roles.append(assignment)
+                continue
+
+            processed += 1
+            normalized = apply_normalization(assignment)
+            if normalized.model_dump() != assignment.model_dump():
+                normalized = normalized.model_copy(update={"updated_by": user_id, "updated_at": now})
+                updated += 1
+                entity_changed = True
+                graph_changed = True
+            if normalized.normalization_status == "unresolved":
+                unresolved += 1
+            new_roles.append(normalized)
+
+        if entity_changed:
+            graph.update_entity(
+                entity.entity_name,
+                entity.entity_type,
+                Entity(**{**entity.model_dump(), "role_assignments": new_roles}),
+            )
+
+    if graph_changed:
+        graph.save_graph()
+
+    return {
+        "doc_id": doc_id,
+        "processed": processed,
+        "updated": updated,
+        "skipped": skipped,
+        "unresolved": unresolved,
+    }
+
+
+async def re_normalize_roles(
+    tenant_id: str,
+    doc_id: str,
+    config_path: str,
+    user_id: str,
+    review_status: Optional[str] = None,
+    entity_type: Optional[str] = None,
+) -> dict:
+    async with _get_lock(tenant_id, doc_id):
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor,
+            _re_normalize_roles_sync,
+            tenant_id,
+            doc_id,
+            config_path,
+            user_id,
+            review_status,
+            entity_type,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "re_normalize_roles",
+        "doc_id": doc_id,
+        "user_id": user_id,
+        "processed": result["processed"],
+        "updated": result["updated"],
+        "review_status": review_status,
+        "entity_type": entity_type,
+    })
+    return result
+
+
+def _role_stats_sync(
+    tenant_id: str,
+    doc_id: str,
+    config_path: str,
+) -> dict:
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    roles = _list_roles_sync(tenant_id, doc_id, config_path)
+    total_entities = len(list(graph.get_all_nodes()))
+    entities_with_roles = len({(row["entity_name"], row["entity_type"]) for row in roles})
+
+    def _count(field: str, fallback: str = "unknown") -> dict[str, int]:
+        return dict(Counter((row.get(field) or fallback) for row in roles))
+
+    return {
+        "doc_id": doc_id,
+        "total_entities": total_entities,
+        "entities_with_roles": entities_with_roles,
+        "coverage_ratio": (entities_with_roles / total_entities) if total_entities else 0.0,
+        "total_roles": len(roles),
+        "unresolved_roles": sum(1 for row in roles if row.get("normalization_status") == "unresolved"),
+        "review_status_counts": _count("review_status"),
+        "normalization_status_counts": _count("normalization_status"),
+        "origin_counts": _count("origin"),
+        "tenure_status_counts": _count("tenure_status"),
+    }
+
+
+async def role_stats(
+    tenant_id: str,
+    doc_id: str,
+    config_path: str,
+) -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _executor,
+        _role_stats_sync,
+        tenant_id,
+        doc_id,
+        config_path,
+    )
+
+
+def _list_role_vocab_sync() -> List[dict]:
+    from Core.utils.role_normalizer import list_vocab_entries
+
+    return list_vocab_entries()
+
+
+async def list_role_vocab() -> List[dict]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _list_role_vocab_sync)
+
+
+def _create_role_vocab_entry_sync(role_input: dict) -> dict:
+    from Core.utils.role_normalizer import add_vocab_entry
+
+    return add_vocab_entry(
+        role_id=role_input["role_id"],
+        canonical=role_input["canonical"],
+        aliases=role_input.get("aliases") or [],
+    )
+
+
+async def create_role_vocab_entry(tenant_id: str, role_input: dict, user_id: str) -> dict:
+    async with _role_vocab_lock:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(_executor, _create_role_vocab_entry_sync, role_input)
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "create_role_vocab_entry",
+        "doc_id": None,
+        "user_id": user_id,
+        "role_id": result["role_id"],
+    })
+    return result
+
+
+def _update_role_vocab_entry_sync(role_id: str, update_fields: dict) -> dict:
+    from Core.utils.role_normalizer import update_vocab_entry
+
+    return update_vocab_entry(
+        role_id,
+        canonical=update_fields.get("canonical"),
+        aliases=update_fields.get("aliases"),
+    )
+
+
+async def update_role_vocab_entry(
+    tenant_id: str,
+    role_id: str,
+    update_fields: dict,
+    user_id: str,
+) -> dict:
+    async with _role_vocab_lock:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor,
+            _update_role_vocab_entry_sync,
+            role_id,
+            update_fields,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "update_role_vocab_entry",
+        "doc_id": None,
+        "user_id": user_id,
+        "role_id": role_id,
+    })
+    return result
+
+
+def _reload_role_vocab_sync() -> List[dict]:
+    from Core.utils.role_normalizer import reload_vocab
+
+    return reload_vocab()
+
+
+async def reload_role_vocab(tenant_id: str, user_id: str) -> List[dict]:
+    async with _role_vocab_lock:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(_executor, _reload_role_vocab_sync)
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "reload_role_vocab",
+        "doc_id": None,
+        "user_id": user_id,
+        "total": len(result),
     })
     return result
 

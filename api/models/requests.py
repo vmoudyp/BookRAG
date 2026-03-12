@@ -747,3 +747,89 @@ class BulkReviewRolesResponse(BaseModel):
         description="Any per-item errors; items with errors are skipped but the rest succeed.",
     )
 
+
+class ReNormalizeRolesRequest(BaseModel):
+    """Request body for POST /{doc_id}/roles/re-normalize."""
+
+    review_status: Optional[str] = Field(
+        None,
+        description="Optionally restrict re-normalization to one review state.",
+    )
+    entity_type: Optional[str] = Field(
+        None,
+        description="Optionally restrict re-normalization to one entity type.",
+    )
+
+
+class ReNormalizeRolesResponse(BaseModel):
+    """Response for POST /{doc_id}/roles/re-normalize."""
+
+    success: bool
+    message: str
+    doc_id: str
+    processed: int = Field(..., description="Assignments considered for re-normalization.")
+    updated: int = Field(..., description="Assignments whose normalized fields changed.")
+    skipped: int = Field(..., description="Assignments skipped because they were manually overridden or curator-locked.")
+    unresolved: int = Field(..., description="Assignments that remain unresolved after re-normalization.")
+
+
+class RoleStatsResponse(BaseModel):
+    """Response for GET /{doc_id}/roles/stats."""
+
+    doc_id: str
+    total_entities: int = Field(..., description="Total entities present in the document graph.")
+    entities_with_roles: int = Field(..., description="Entities that currently have at least one role assignment.")
+    coverage_ratio: float = Field(..., description="entities_with_roles / total_entities.")
+    total_roles: int = Field(..., description="Total role assignments across the document.")
+    unresolved_roles: int = Field(..., description="Role assignments still marked unresolved.")
+    review_status_counts: dict[str, int] = Field(default_factory=dict, description="Counts grouped by review_status.")
+    normalization_status_counts: dict[str, int] = Field(default_factory=dict, description="Counts grouped by normalization_status.")
+    origin_counts: dict[str, int] = Field(default_factory=dict, description="Counts grouped by origin.")
+    tenure_status_counts: dict[str, int] = Field(default_factory=dict, description="Counts grouped by tenure_status.")
+
+
+class RoleVocabularyEntryInfo(BaseModel):
+    """One entry in the curated role vocabulary."""
+
+    role_id: str = Field(..., description="Stable vocabulary identifier.")
+    canonical: str = Field(..., description="Preferred canonical role label.")
+    aliases: List[str] = Field(default_factory=list, description="Known aliases or surface forms.")
+
+
+class RoleVocabularyListResponse(BaseModel):
+    """Response for GET /role-vocab."""
+
+    total: int = Field(..., description="Total vocabulary entries returned.")
+    roles: List[RoleVocabularyEntryInfo] = Field(default_factory=list, description="Curated role vocabulary entries.")
+
+
+class CreateRoleVocabularyEntryRequest(BaseModel):
+    """Request body for POST /role-vocab."""
+
+    role_id: str = Field(..., description="Stable vocabulary identifier to create.")
+    canonical: str = Field(..., description="Preferred canonical role label.")
+    aliases: List[str] = Field(default_factory=list, description="Known aliases or alternate spellings.")
+
+
+class UpdateRoleVocabularyEntryRequest(BaseModel):
+    """Request body for PATCH /role-vocab/{role_id}."""
+
+    canonical: Optional[str] = Field(None, description="Updated canonical role label.")
+    aliases: Optional[List[str]] = Field(None, description="Replacement alias list.")
+
+
+class RoleVocabularyMutationResponse(BaseModel):
+    """Response for creating or updating one vocabulary entry."""
+
+    success: bool
+    message: str
+    role: RoleVocabularyEntryInfo
+
+
+class RoleVocabularyReloadResponse(BaseModel):
+    """Response for POST /role-vocab/reload."""
+
+    success: bool
+    message: str
+    total: int = Field(..., description="Vocabulary entry count after reload.")
+
