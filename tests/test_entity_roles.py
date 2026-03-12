@@ -6,6 +6,7 @@ before any module imports so the suite runs in the lightweight CI environment.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import importlib
 import importlib.util
@@ -57,7 +58,9 @@ _fake_db.__path__ = []
 _fake_db_mongo = ModuleType("api.db.mongodb")
 
 async def _noop_log(*a, **kw):
-    pass
+    # Intentional async no-op for awaited audit-log calls in the service layer.
+    await asyncio.sleep(0)
+    return None
 
 _fake_db_mongo.log_entity_edit = _noop_log
 _fake_db.mongodb = _fake_db_mongo
@@ -478,7 +481,7 @@ class TestRoleStatsSync:
         assert result["doc_id"] == "doc-9"
         assert result["total_entities"] == 4
         assert result["entities_with_roles"] == 2
-        assert result["coverage_ratio"] == 0.5
+        assert result["coverage_ratio"] == pytest.approx(0.5)
         assert result["total_roles"] == 3
         assert result["unresolved_roles"] == 1
         assert result["review_status_counts"] == {"confirmed": 2, "suggested": 1}

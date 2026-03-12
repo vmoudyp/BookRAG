@@ -61,12 +61,12 @@ _EXPLICIT_CURRENT_TENURE_QUERY_PATTERNS = re.compile(
 )
 
 _EXPLICIT_FORMER_TENURE_QUERY_PATTERNS = re.compile(
-    r"\b(former|previous|past|prior|formerly)\b|(?:\bex[- ])",
+    r"\b(former|previous|past|prior|formerly)\b|\bex[- ]",
     re.IGNORECASE,
 )
 
 _CURRENT_TENURE_QUERY_PATTERNS = re.compile(
-    r"\b(who is|who are|holds?|hold|serves? as|serving as)\b",
+    r"\b(who is|who are|holds?|serves? as|serving as)\b",
     re.IGNORECASE,
 )
 

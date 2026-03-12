@@ -157,17 +157,6 @@ async def list_entities(tenant_id: str, doc_id: str, config_path: str) -> List[d
     )
 
 
-def _serialize_entity(graph, entity) -> dict:
-    return {
-        "entity_name": entity.entity_name,
-        "entity_type": entity.entity_type,
-        "description": entity.description,
-        "source_ids": sorted(entity.source_ids),
-        "node_name": graph.get_node_name_from_entity(entity),
-        "role_assignments": [ra.model_dump() for ra in entity.role_assignments],
-    }
-
-
 # ── Rename entity ─────────────────────────────────────────────────────────────
 
 def _rename_sync(
@@ -331,7 +320,7 @@ def _suggest_merges_sync(
         by_type[ent["entity_type"]].append(ent)
 
     # String similarity — only within same-type groups
-    for _etype, group in by_type.items():
+    for group in by_type.values():
         n = len(group)
         for i in range(n):
             for j in range(i + 1, n):
@@ -405,7 +394,7 @@ def _merge_role_assignments(all_lists) -> list:
     Conflict resolution priority: confirmed > suggested, manual > extracted,
     higher normalization_confidence wins.  source_ids and evidence are always unioned.
     """
-    from Core.Index.Graph import RoleAssignment, RoleEvidence
+    from Core.Index.Graph import RoleAssignment
 
     seen: dict = {}  # key -> winning RoleAssignment
 
@@ -425,11 +414,11 @@ def _merge_role_assignments(all_lists) -> list:
             else:
                 existing = seen[key]
                 # prefer stronger review_status
-                if _review_priority.get(ra.review_status, 99) < _review_priority.get(existing.review_status, 99):
-                    seen[key] = ra
-                    existing = ra
-                # prefer manual over extracted
-                elif _origin_priority.get(ra.origin, 99) < _origin_priority.get(existing.origin, 99):
+                replace_existing = (
+                    _review_priority.get(ra.review_status, 99) < _review_priority.get(existing.review_status, 99)
+                    or _origin_priority.get(ra.origin, 99) < _origin_priority.get(existing.origin, 99)
+                )
+                if replace_existing:
                     seen[key] = ra
                     existing = ra
                 # union source_ids and evidence
@@ -498,14 +487,14 @@ def _merge_sync(
         src_node = graph.get_node_name_from_str(src["entity_name"], src["entity_type"])
         if src_node == canonical_node or src_node not in graph.kg:
             continue
-        for neighbor in list(graph.kg.neighbors(src_node)):
+        for neighbor in graph.kg.neighbors(src_node):
             if neighbor == canonical_node:
                 continue
             edge_data = graph.kg.get_edge_data(src_node, neighbor)
             if not graph.kg.has_edge(canonical_node, neighbor):
                 graph.kg.add_edge(canonical_node, neighbor, **edge_data)
         # Update tree2kg
-        for tree_id, nodes in graph.tree2kg.items():
+        for _, nodes in graph.tree2kg.items():
             if src_node in nodes:
                 nodes.discard(src_node)
                 nodes.add(canonical_node)
@@ -808,7 +797,7 @@ def _list_roles_sync(
     """
     graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
     rows: List[dict] = []
-    for node_name, node_data in graph.kg.nodes(data=True):
+    for _, node_data in graph.kg.nodes(data=True):
         ent_name = node_data.get("entity_name", "")
         ent_type = node_data.get("entity_type", "")
         if entity_type and ent_type.upper() != entity_type.upper():
@@ -959,7 +948,7 @@ def _re_normalize_roles_sync(
     graph_changed = False
     now = datetime.now(timezone.utc).isoformat()
 
-    for node_name in list(graph.get_all_nodes()):
+    for node_name in graph.get_all_nodes():
         entity = graph.get_entity_by_node_name(node_name)
         if entity_type and entity.entity_type.upper() != entity_type.upper():
             continue

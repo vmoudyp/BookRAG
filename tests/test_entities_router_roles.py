@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 from pathlib import Path
@@ -5,6 +6,12 @@ from types import ModuleType
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
+
+
+async def _async_return(value):
+    await asyncio.sleep(0)
+    return value
 
 
 def _load_requests_module():
@@ -28,13 +35,13 @@ def _load_entities_router_module(monkeypatch):
     fake_dependencies = ModuleType("api.dependencies")
 
     async def fake_get_current_user():
-        return {"user_id": "user-1", "tenant_id": "tenant-a", "role": "admin"}
+        return await _async_return({"user_id": "user-1", "tenant_id": "tenant-a", "role": "admin"})
 
     async def fake_require_admin():
-        return {"user_id": "user-1", "tenant_id": "tenant-a", "role": "admin"}
+        return await _async_return({"user_id": "user-1", "tenant_id": "tenant-a", "role": "admin"})
 
     async def fake_check_doc_access(*args, **kwargs):
-        return True
+        return await _async_return(True)
 
     fake_dependencies.get_current_user = fake_get_current_user
     fake_dependencies.require_admin = fake_require_admin
@@ -45,7 +52,7 @@ def _load_entities_router_module(monkeypatch):
     fake_entity_editor = ModuleType("api.services.entity_editor")
 
     async def fake_noop(*args, **kwargs):
-        return None
+        return await _async_return(None)
 
     for name in [
         "list_roles",
@@ -107,7 +114,9 @@ def test_entities_role_list_and_bulk_review_routes(monkeypatch):
             "review_status": review_status,
             "entity_type": entity_type,
         }
-        return [{"entity_name": "Alice", "entity_type": "PERSON", "assignment_id": "ra-1", "role_name": "President"}]
+        return await _async_return([
+            {"entity_name": "Alice", "entity_type": "PERSON", "assignment_id": "ra-1", "role_name": "President"}
+        ])
 
     async def fake_bulk_review_roles(tenant_id, doc_id, config_path, reviews, user_id):
         captured["bulk_review_roles"] = {
@@ -117,7 +126,7 @@ def test_entities_role_list_and_bulk_review_routes(monkeypatch):
             "reviews": reviews,
             "user_id": user_id,
         }
-        return {"processed": 1, "errors": [{"assignment_id": "ra-2", "error": "missing"}]}
+        return await _async_return({"processed": 1, "errors": [{"assignment_id": "ra-2", "error": "missing"}]})
 
     monkeypatch.setattr(entities_module.svc, "list_roles", fake_list_roles)
     monkeypatch.setattr(entities_module.svc, "bulk_review_roles", fake_bulk_review_roles)
@@ -176,11 +185,11 @@ def test_entities_re_normalize_and_stats_routes(monkeypatch):
 
     async def fake_re_normalize_roles(**kwargs):
         captured["re_normalize_roles"] = kwargs
-        return {"doc_id": "doc-1", "processed": 3, "updated": 2, "skipped": 1, "unresolved": 1}
+        return await _async_return({"doc_id": "doc-1", "processed": 3, "updated": 2, "skipped": 1, "unresolved": 1})
 
     async def fake_role_stats(**kwargs):
         captured["role_stats"] = kwargs
-        return {
+        return await _async_return({
             "doc_id": "doc-1",
             "total_entities": 4,
             "entities_with_roles": 2,
@@ -191,7 +200,7 @@ def test_entities_re_normalize_and_stats_routes(monkeypatch):
             "normalization_status_counts": {"matched": 2, "unresolved": 1},
             "origin_counts": {"manual": 1, "extracted": 2},
             "tenure_status_counts": {"current": 2, "former": 1},
-        }
+        })
 
     monkeypatch.setattr(entities_module.svc, "re_normalize_roles", fake_re_normalize_roles)
     monkeypatch.setattr(entities_module.svc, "role_stats", fake_role_stats)
@@ -210,7 +219,7 @@ def test_entities_re_normalize_and_stats_routes(monkeypatch):
     assert captured["re_normalize_roles"]["user_id"] == "user-1"
 
     assert stats_response.status_code == 200
-    assert stats_response.json()["coverage_ratio"] == 0.5
+    assert stats_response.json()["coverage_ratio"] == pytest.approx(0.5)
     assert captured["role_stats"] == {
         "tenant_id": "tenant-a",
         "doc_id": "doc-1",
@@ -224,7 +233,9 @@ def test_entities_role_vocab_admin_routes(monkeypatch):
 
     async def fake_list_role_vocab():
         captured["list_role_vocab"] = True
-        return [{"role_id": "role:president", "canonical": "President", "aliases": ["Head of State"]}]
+        return await _async_return([
+            {"role_id": "role:president", "canonical": "President", "aliases": ["Head of State"]}
+        ])
 
     async def fake_create_role_vocab_entry(tenant_id, role_input, user_id):
         captured["create_role_vocab_entry"] = {
@@ -232,7 +243,11 @@ def test_entities_role_vocab_admin_routes(monkeypatch):
             "role_input": role_input,
             "user_id": user_id,
         }
-        return {"role_id": role_input["role_id"], "canonical": role_input["canonical"], "aliases": role_input["aliases"]}
+        return await _async_return({
+            "role_id": role_input["role_id"],
+            "canonical": role_input["canonical"],
+            "aliases": role_input["aliases"],
+        })
 
     async def fake_update_role_vocab_entry(tenant_id, role_id, update_fields, user_id):
         captured["update_role_vocab_entry"] = {
@@ -241,11 +256,13 @@ def test_entities_role_vocab_admin_routes(monkeypatch):
             "update_fields": update_fields,
             "user_id": user_id,
         }
-        return {"role_id": role_id, "canonical": "Prime Minister", "aliases": ["Premier"]}
+        return await _async_return({"role_id": role_id, "canonical": "Prime Minister", "aliases": ["Premier"]})
 
     async def fake_reload_role_vocab(tenant_id, user_id):
         captured["reload_role_vocab"] = {"tenant_id": tenant_id, "user_id": user_id}
-        return [{"role_id": "role:president", "canonical": "President", "aliases": []}]
+        return await _async_return([
+            {"role_id": "role:president", "canonical": "President", "aliases": []}
+        ])
 
     monkeypatch.setattr(entities_module.svc, "list_role_vocab", fake_list_role_vocab)
     monkeypatch.setattr(entities_module.svc, "create_role_vocab_entry", fake_create_role_vocab_entry)

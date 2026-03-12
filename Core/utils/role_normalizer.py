@@ -17,7 +17,10 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from Core.Index.Graph import RoleAssignment
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +211,7 @@ def normalize_role(
     return None, None, "unresolved"
 
 
-def apply_normalization(assignment: "RoleAssignment") -> "RoleAssignment":  # noqa: F821
+def apply_normalization(assignment: RoleAssignment) -> RoleAssignment:
     """Normalise a ``RoleAssignment`` in-place (returns new model instance).
 
     Skips assignments already marked ``confirmed`` or ``manual_override``.
@@ -238,10 +241,15 @@ def apply_normalization(assignment: "RoleAssignment") -> "RoleAssignment":  # no
         best_role_id, best_canonical, best_method = normalize_role(assignment.role_name)
 
     norm_status = "matched" if best_role_id else "unresolved"
+    confidence_by_method = {
+        "exact": 1.0,
+        "alias": 0.8,
+        "prefix": 0.5,
+    }
 
     updates = {
         "normalization_status": norm_status,
-        "normalization_confidence": 1.0 if best_method == "exact" else 0.8 if best_method == "alias" else 0.5 if best_method == "prefix" else None,
+        "normalization_confidence": confidence_by_method.get(best_method),
     }
     if best_role_id:
         updates["role_id"] = best_role_id

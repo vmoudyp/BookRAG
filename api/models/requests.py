@@ -16,7 +16,7 @@ class RegisterRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
-                {"username": "alice", "password": "StrongPass1", "tenant_id": "tenant-a"}
+                {"username": "alice", "password": "<redacted>", "tenant_id": "tenant-a"}  # NOSONAR
             ]
         }
     )
@@ -46,7 +46,7 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
-                {"username": "alice", "password": "StrongPass1", "tenant_id": "tenant-a"}
+                {"username": "alice", "password": "<redacted>", "tenant_id": "tenant-a"}  # NOSONAR
             ]
         }
     )

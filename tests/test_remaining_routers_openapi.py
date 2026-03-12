@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 from pathlib import Path
@@ -5,6 +6,11 @@ from types import ModuleType
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+
+async def _async_return(value):
+    await asyncio.sleep(0)
+    return value
 
 
 def _load_requests_module():
@@ -24,10 +30,10 @@ def _install_base_modules(monkeypatch):
     fake_db_module = ModuleType("api.db.mongodb")
 
     async def fake_noop(*args, **kwargs):
-        return None
+        return await _async_return(None)
 
     async def fake_false(*args, **kwargs):
-        return False
+        return await _async_return(False)
 
     fake_db_module.get_tenant = fake_noop
     fake_db_module.get_user_by_username = fake_noop
@@ -57,16 +63,16 @@ def _install_base_modules(monkeypatch):
     fake_dependencies.decode_refresh_token = lambda token: {"tenant_id": "tenant-a", "sub": "alice", "role": "user"}
 
     async def fake_rate_limit_login():
-        return None
+        return await _async_return(None)
 
     async def fake_get_current_user():
-        return {"user_id": "alice", "tenant_id": "tenant-a", "role": "admin"}
+        return await _async_return({"user_id": "alice", "tenant_id": "tenant-a", "role": "admin"})
 
     async def fake_require_admin():
-        return {"user_id": "alice", "tenant_id": "tenant-a", "role": "admin"}
+        return await _async_return({"user_id": "alice", "tenant_id": "tenant-a", "role": "admin"})
 
     async def fake_check_doc_access(*args, **kwargs):
-        return True
+        return await _async_return(True)
 
     fake_dependencies.rate_limit_login = fake_rate_limit_login
     fake_dependencies.get_current_user = fake_get_current_user
