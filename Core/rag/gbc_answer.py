@@ -273,11 +273,13 @@ class AnswerAgent:
         # 1. Prepare evidence: Separate nodes and handle optional entities
         graph_str = ""
         if entities:
-            graph_str = f"There are f{len(entities)} relevant entities:\n"
+            graph_str = f"There are {len(entities)} relevant entities:\n"
             for ent in entities:
-                graph_str += (
-                    f"- Name: {ent['entity_name']}, Type: {ent['entity_type']}\n"
-                )
+                line = f"- Name: {ent['entity_name']}, Type: {ent['entity_type']}"
+                role_summary = ent.get("role_summary", "")
+                if role_summary:
+                    line += f"; Roles: {role_summary}"
+                graph_str += line + "\n"
 
         text_nodes, image_nodes = self._prepare_evidence(retrieved_nodes)
 

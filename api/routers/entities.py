@@ -2,6 +2,8 @@
 import logging
 import os
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.models.requests import (
@@ -12,6 +14,7 @@ from api.models.requests import (
     SplitEntityRequest,
     SuggestMergesResponse, MergeSuggestion, EntityRef,
     AddRoleRequest, UpdateRoleRequest, ReviewRoleRequest,
+    RoleListResponse, BulkReviewRolesRequest, BulkReviewRolesResponse,
 )
 from api.dependencies import get_current_user, check_doc_access
 import api.services.entity_editor as svc
@@ -378,6 +381,99 @@ async def delete_role_assignment(
         success=True,
         message=f"Deleted role assignment '{assignment_id}' from '{entity_name}'",
         entities=[EntityInfo(**e) for e in updated],
+    )
+
+
+# ── Role curation export ──────────────────────────────────────────────────────
+
+@router.get(
+    "/{doc_id}/roles",
+    response_model=RoleListResponse,
+    summary="List role assignments",
+    description=(
+        "Return all domain role assignments for a document, optionally filtered by "
+        "review_status (e.g. 'suggested', 'confirmed', 'disputed', 'rejected') and/or entity_type."
+    ),
+    responses={
+        403: {"description": "Access denied to this document."},
+        500: {"description": "Internal server error."},
+    },
+)
+async def list_role_assignments(
+    doc_id: str,
+    review_status: Optional[str] = Query(
+        None,
+        description="Filter by review status: suggested | confirmed | disputed | rejected.",
+    ),
+    entity_type: Optional[str] = Query(
+        None,
+        description="Filter by entity type, e.g. PERSON or ORGANIZATION.",
+    ),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return all role assignments for a document, with optional filters."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    try:
+        roles = await svc.list_roles(
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            config_path=CONFIG_PATH,
+            review_status=review_status,
+            entity_type=entity_type,
+        )
+    except Exception as exc:
+        log.exception(f"list_role_assignments failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    return RoleListResponse(doc_id=doc_id, total=len(roles), roles=roles)
+
+
+@router.post(
+    "/{doc_id}/roles/bulk-review",
+    response_model=BulkReviewRolesResponse,
+    summary="Bulk-review role assignments",
+    description=(
+        "Set review status (confirmed / disputed / rejected) on multiple role assignments "
+        "in a single request. Partial failures are reported per-item without aborting the "
+        "rest of the batch."
+    ),
+    responses={
+        403: {"description": "Access denied to this document."},
+        500: {"description": "Internal server error."},
+    },
+)
+async def bulk_review_role_assignments(
+    doc_id: str,
+    req: BulkReviewRolesRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Bulk-set review status on a list of role assignments."""
+    tenant_id = current_user["tenant_id"]
+    user_id = current_user["user_id"]
+    await _require_access(tenant_id, user_id, doc_id)
+
+    try:
+        result = await svc.bulk_review_roles(
+            tenant_id=tenant_id,
+            doc_id=doc_id,
+            config_path=CONFIG_PATH,
+            reviews=[item.model_dump() for item in req.reviews],
+            user_id=user_id,
+        )
+    except Exception as exc:
+        log.exception(f"bulk_review_role_assignments failed: {exc}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    ok = result["processed"]
+    errs = result["errors"]
+    return BulkReviewRolesResponse(
+        success=ok > 0 or not errs,
+        message=f"Processed {ok} assignment(s); {len(errs)} error(s).",
+        processed=ok,
+        errors=errs,
     )
 
 

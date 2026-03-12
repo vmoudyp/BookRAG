@@ -31,6 +31,12 @@ class SubStep(BaseModel):
     iteration_image_nodes: Union[str | List[Any]] = Field(default_factory=list)
     iteration_graph_nodes: Union[str | List[Any]] = Field(default_factory=list)
 
+    # Role-aware retrieval: structured role evidence injected alongside graph data
+    role_evidence: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured role assignments found for entities relevant to this sub-query.",
+    )
+
     partial_answers: Union[str | List[Any]] = Field(default_factory=list)
     generated_answer: str = ""
 

@@ -40,8 +40,6 @@ roles:
     aliases:
       - Menteri Koordinator
       - Menko
-      - Menkoinfo
-      - Menkopolhukam
       - Menko Bidang
 
   - role_id: role:governor
@@ -162,10 +160,827 @@ roles:
       - Associate Justice
       - Ketua Mahkamah
 
+  - role_id: role:regent
+    canonical: Regent
+    aliases:
+      - Bupati
+      - Kepala Daerah
+      - Regent of
+      - District Head
+
+  - role_id: role:deputy_governor
+    canonical: Deputy Governor
+    aliases:
+      - Wakil Gubernur
+      - Wagub
+      - Lieutenant Governor
+
+  - role_id: role:deputy_mayor
+    canonical: Deputy Mayor
+    aliases:
+      - Wakil Walikota
+      - Wakil Bupati
+      - Wabup
+      - Deputy Regent
+
+  - role_id: role:village_head
+    canonical: Village Head
+    aliases:
+      - Kepala Desa
+      - Kades
+      - Lurah
+      - Kepala Kelurahan
+
+  - role_id: role:sub_district_head
+    canonical: Sub-District Head
+    aliases:
+      - Camat
+      - Kepala Kecamatan
+
+  # ── Executive / Cabinet ──────────────────────────────────────────────────────
+
+  - role_id: role:state_secretary
+    canonical: State Secretary
+    aliases:
+      - Sekretaris Negara
+      - Setneg
+      - Secretary of State
+
+  - role_id: role:cabinet_secretary
+    canonical: Cabinet Secretary
+    aliases:
+      - Sekretaris Kabinet
+      - Setkab
+
+  - role_id: role:presidential_staff_chief
+    canonical: Chief of Presidential Staff
+    aliases:
+      - Kepala Staf Kepresidenan
+      - KSP
+      - Chief of Staff to the President
+
+  - role_id: role:special_staff
+    canonical: Special Staff
+    aliases:
+      - Staf Khusus
+      - Stafsus
+      - Special Advisor to the President
+      - Special Assistant
+
+  - role_id: role:senior_advisor
+    canonical: Senior Advisor
+    aliases:
+      - Penasehat Senior
+      - Penasihat
+      - Senior Consultant
+      - Chief Advisor
+
+  - role_id: role:deputy_minister
+    canonical: Deputy Minister
+    aliases:
+      - Wakil Menteri
+      - Wamen
+      - Vice Minister
+      - Deputy Secretary
+
+  - role_id: role:state_minister
+    canonical: State Minister
+    aliases:
+      - Menteri Negara
+      - Minister of State
+
+  - role_id: role:minister_of_finance
+    canonical: Minister of Finance
+    aliases:
+      - Menteri Keuangan
+      - Menkeu
+      - Finance Minister
+      - Treasury Secretary
+
+  - role_id: role:minister_of_home_affairs
+    canonical: Minister of Home Affairs
+    aliases:
+      - Menteri Dalam Negeri
+      - Mendagri
+      - Interior Minister
+      - Minister of the Interior
+
+  - role_id: role:minister_of_foreign_affairs
+    canonical: Minister of Foreign Affairs
+    aliases:
+      - Menteri Luar Negeri
+      - Menlu
+      - Foreign Minister
+      - Secretary of State for Foreign Affairs
+
+  - role_id: role:minister_of_defense
+    canonical: Minister of Defense
+    aliases:
+      - Menteri Pertahanan
+      - Menhan
+      - Defense Minister
+      - Secretary of Defense
+
+  - role_id: role:minister_of_law
+    canonical: Minister of Law and Human Rights
+    aliases:
+      - Menteri Hukum dan HAM
+      - Menkumham
+      - Minister of Justice
+      - Attorney General (Indonesia)
+
+  - role_id: role:minister_of_education
+    canonical: Minister of Education
+    aliases:
+      - Mendikbud
+      - Mendikbudristek
+      - Menteri Pendidikan
+      - Menteri Pendidikan dan Kebudayaan
+      - Education Minister
+
+  - role_id: role:minister_of_health
+    canonical: Minister of Health
+    aliases:
+      - Menteri Kesehatan
+      - Menkes
+      - Health Minister
+
+  - role_id: role:minister_of_soe
+    canonical: Minister of State-Owned Enterprises
+    aliases:
+      - Menteri BUMN
+      - Men-BUMN
+      - Minister of SOEs
+
+  - role_id: role:minister_of_energy
+    canonical: Minister of Energy and Mineral Resources
+    aliases:
+      - Menteri ESDM
+      - Menteri Energi
+      - Energy Minister
+
+  - role_id: role:minister_of_public_works
+    canonical: Minister of Public Works
+    aliases:
+      - Menteri PUPR
+      - Menteri PU
+      - Public Works Minister
+
+  - role_id: role:minister_of_trade
+    canonical: Minister of Trade
+    aliases:
+      - Menteri Perdagangan
+      - Mendag
+      - Trade Minister
+
+  - role_id: role:minister_of_industry
+    canonical: Minister of Industry
+    aliases:
+      - Menteri Perindustrian
+      - Menperin
+      - Industry Minister
+
+  - role_id: role:minister_of_agriculture
+    canonical: Minister of Agriculture
+    aliases:
+      - Menteri Pertanian
+      - Mentan
+      - Agriculture Minister
+
+  - role_id: role:minister_of_transportation
+    canonical: Minister of Transportation
+    aliases:
+      - Menteri Perhubungan
+      - Menhub
+      - Transport Minister
+
+  - role_id: role:minister_of_communication
+    canonical: Minister of Communication and Information Technology
+    aliases:
+      - Menteri Kominfo
+      - Menkominfo
+      - Communications Minister
+      - Minister of ICT
+
+  - role_id: role:minister_of_religion
+    canonical: Minister of Religious Affairs
+    aliases:
+      - Menteri Agama
+      - Menag
+      - Religious Affairs Minister
+
+  - role_id: role:minister_of_social_affairs
+    canonical: Minister of Social Affairs
+    aliases:
+      - Menteri Sosial
+      - Mensos
+      - Social Affairs Minister
+
+  - role_id: role:minister_of_manpower
+    canonical: Minister of Manpower
+    aliases:
+      - Menteri Ketenagakerjaan
+      - Menaker
+      - Labour Minister
+      - Minister of Labour
+
+  - role_id: role:minister_of_maritime
+    canonical: Coordinating Minister for Maritime Affairs and Investment
+    aliases:
+      - Menko Marves
+      - Menteri Koordinator Maritim
+      - Menko Kemaritiman
+
+  - role_id: role:minister_of_polhukam
+    canonical: Coordinating Minister for Political, Legal and Security Affairs
+    aliases:
+      - Menkopolhukam
+      - Menko Polhukam
+      - Menko Polkam
+
+  - role_id: role:minister_of_ekon
+    canonical: Coordinating Minister for Economic Affairs
+    aliases:
+      - Menko Perekonomian
+      - Menko Ekonomi
+      - Menteri Koordinator Perekonomian
+
+  - role_id: role:minister_of_pmk
+    canonical: Coordinating Minister for Human Development and Cultural Affairs
+    aliases:
+      - Menko PMK
+      - Menteri Koordinator PMK
+
+  # ── Legislature ──────────────────────────────────────────────────────────────
+
+  - role_id: role:speaker_of_parliament
+    canonical: Speaker of Parliament
+    aliases:
+      - Ketua DPR
+      - Ketua MPR
+      - Speaker of the House
+      - Speaker of the DPR
+      - Ketua DPRD
+
+  - role_id: role:deputy_speaker
+    canonical: Deputy Speaker
+    aliases:
+      - Wakil Ketua DPR
+      - Wakil Ketua MPR
+      - Deputy Speaker of Parliament
+      - Vice Speaker
+
+  - role_id: role:member_dpd
+    canonical: Member of the Regional Representative Council
+    aliases:
+      - Anggota DPD
+      - DPD Member
+      - Anggota Dewan Perwakilan Daerah
+
+  - role_id: role:member_dprd
+    canonical: Member of Regional Parliament
+    aliases:
+      - Anggota DPRD
+      - DPRD Member
+      - Anggota Legislatif Daerah
+
+  - role_id: role:fraction_chair
+    canonical: Fraction Chair
+    aliases:
+      - Ketua Fraksi
+      - Parliamentary Faction Chair
+
+  - role_id: role:commission_chair
+    canonical: Commission Chair
+    aliases:
+      - Ketua Komisi
+      - Committee Chair
+      - Chair of the Commission
+
+  # ── Judicial ─────────────────────────────────────────────────────────────────
+
+  - role_id: role:chief_justice
+    canonical: Chief Justice
+    aliases:
+      - Ketua Mahkamah Agung
+      - Ketua MA
+      - Chief Justice of the Supreme Court
+
+  - role_id: role:chief_justice_mk
+    canonical: Chief Justice of the Constitutional Court
+    aliases:
+      - Ketua Mahkamah Konstitusi
+      - Ketua MK
+      - Chief Justice MK
+
+  - role_id: role:attorney_general
+    canonical: Attorney General
+    aliases:
+      - Jaksa Agung
+      - JA
+      - Prosecutor General
+
+  - role_id: role:deputy_attorney_general
+    canonical: Deputy Attorney General
+    aliases:
+      - Wakil Jaksa Agung
+      - Deputy Prosecutor General
+
+  - role_id: role:prosecutor
+    canonical: Prosecutor
+    aliases:
+      - Jaksa
+      - Jaksa Penuntut Umum
+      - JPU
+      - Public Prosecutor
+      - State Prosecutor
+
+  - role_id: role:public_defender
+    canonical: Public Defender
+    aliases:
+      - Pengacara Publik
+      - Legal Aid Lawyer
+      - Advokat LBH
+
+  - role_id: role:lawyer
+    canonical: Lawyer
+    aliases:
+      - Advokat
+      - Pengacara
+      - Counsel
+      - Legal Counsel
+      - Attorney
+
+  - role_id: role:notary
+    canonical: Notary
+    aliases:
+      - Notaris
+      - Notary Public
+      - PPAT
+
+  - role_id: role:ombudsman
+    canonical: Ombudsman
+    aliases:
+      - Ombudsman RI
+      - Anggota Ombudsman
+
+  # ── Military / Police ────────────────────────────────────────────────────────
+
+  - role_id: role:commander_in_chief
+    canonical: Commander in Chief
+    aliases:
+      - Panglima TNI
+      - Panglima Tentara Nasional Indonesia
+      - Commander of the Indonesian Armed Forces
+
+  - role_id: role:army_chief
+    canonical: Army Chief of Staff
+    aliases:
+      - KSAD
+      - Kepala Staf Angkatan Darat
+      - Chief of Army Staff
+
+  - role_id: role:navy_chief
+    canonical: Navy Chief of Staff
+    aliases:
+      - KSAL
+      - Kepala Staf Angkatan Laut
+      - Chief of Naval Operations
+
+  - role_id: role:air_force_chief
+    canonical: Air Force Chief of Staff
+    aliases:
+      - KSAU
+      - Kepala Staf Angkatan Udara
+      - Chief of Air Staff
+
+  - role_id: role:national_police_chief
+    canonical: National Police Chief
+    aliases:
+      - Kapolri
+      - Kepala Polri
+      - Chief of the Indonesian National Police
+      - Inspector General of Police
+
+  - role_id: role:regional_police_chief
+    canonical: Regional Police Chief
+    aliases:
+      - Kapolda
+      - Kepala Polisi Daerah
+      - Chief of Regional Police
+
+  - role_id: role:district_police_chief
+    canonical: District Police Chief
+    aliases:
+      - Kapolres
+      - Kepala Polisi Resor
+
+  - role_id: role:general
+    canonical: General
+    aliases:
+      - Jenderal
+      - Jend.
+      - General (Army)
+      - Full General
+
+  - role_id: role:lieutenant_general
+    canonical: Lieutenant General
+    aliases:
+      - Letjen
+      - Letnan Jenderal
+      - Lt. Gen.
+
+  - role_id: role:major_general
+    canonical: Major General
+    aliases:
+      - Mayjen
+      - Mayor Jenderal
+      - Maj. Gen.
+
+  - role_id: role:brigadier_general
+    canonical: Brigadier General
+    aliases:
+      - Brigjen
+      - Brigadir Jenderal
+      - Brig. Gen.
+
+  - role_id: role:admiral
+    canonical: Admiral
+    aliases:
+      - Laksamana
+      - Admiral (Navy)
+      - Fleet Admiral
+
+  - role_id: role:air_marshal
+    canonical: Air Marshal
+    aliases:
+      - Marsekal
+      - Marsekal TNI AU
+      - Marshal of the Air Force
+
+  # ── State Bodies / Commissions ───────────────────────────────────────────────
+
+  - role_id: role:kpk_chair
+    canonical: KPK Chairman
+    aliases:
+      - Ketua KPK
+      - Chairman of the Corruption Eradication Commission
+      - Chair of KPK
+
+  - role_id: role:kpk_commissioner
+    canonical: KPK Commissioner
+    aliases:
+      - Pimpinan KPK
+      - Komisioner KPK
+
+  - role_id: role:kpu_chair
+    canonical: KPU Chairman
+    aliases:
+      - Ketua KPU
+      - Chairman of the General Elections Commission
+
+  - role_id: role:bawaslu_chair
+    canonical: Bawaslu Chairman
+    aliases:
+      - Ketua Bawaslu
+      - Chairman of the Election Supervisory Agency
+
+  - role_id: role:ojk_chair
+    canonical: OJK Chairman
+    aliases:
+      - Ketua OJK
+      - Chairman of the Financial Services Authority
+      - Chair of OJK
+
+  - role_id: role:bi_governor
+    canonical: Bank Indonesia Governor
+    aliases:
+      - Gubernur Bank Indonesia
+      - BI Governor
+      - Central Bank Governor
+
+  - role_id: role:bnpt_chief
+    canonical: BNPT Chief
+    aliases:
+      - Kepala BNPT
+      - Chief of the National Counter-Terrorism Agency
+
+  - role_id: role:bpk_chair
+    canonical: BPK Chairman
+    aliases:
+      - Ketua BPK
+      - Chairman of the Supreme Audit Agency
+
+  - role_id: role:bappenas_head
+    canonical: Head of Bappenas
+    aliases:
+      - Kepala Bappenas
+      - Menteri PPN
+      - Minister of National Development Planning
+
+  - role_id: role:bps_head
+    canonical: Head of Statistics Indonesia
+    aliases:
+      - Kepala BPS
+      - Chief of the Central Bureau of Statistics
+
+  - role_id: role:komnas_ham_chair
+    canonical: Komnas HAM Chair
+    aliases:
+      - Ketua Komnas HAM
+      - Chairman of the National Human Rights Commission
+
+  # ── Corporate / SOE ──────────────────────────────────────────────────────────
+
+  - role_id: role:coo
+    canonical: Chief Operating Officer
+    aliases:
+      - COO
+      - Chief Operations Officer
+      - Direktur Operasional
+
+  - role_id: role:cto
+    canonical: Chief Technology Officer
+    aliases:
+      - CTO
+      - Chief Tech Officer
+      - Direktur Teknologi
+
+  - role_id: role:cio
+    canonical: Chief Information Officer
+    aliases:
+      - CIO
+      - Direktur Sistem Informasi
+
+  - role_id: role:cmo
+    canonical: Chief Marketing Officer
+    aliases:
+      - CMO
+      - Direktur Pemasaran
+      - Marketing Director
+
+  - role_id: role:chro
+    canonical: Chief Human Resources Officer
+    aliases:
+      - CHRO
+      - HR Director
+      - Direktur SDM
+      - Direktur Sumber Daya Manusia
+
+  - role_id: role:board_president_commissioner
+    canonical: President Commissioner
+    aliases:
+      - Komisaris Utama
+      - Komut
+      - President of the Board of Commissioners
+
+  - role_id: role:commissioner
+    canonical: Commissioner
+    aliases:
+      - Komisaris
+      - Board Commissioner
+      - Independent Commissioner
+      - Komisaris Independen
+
+  - role_id: role:board_director
+    canonical: Director
+    aliases:
+      - Direktur
+      - Board Director
+      - Executive Director
+      - Direktur Eksekutif
+
+  - role_id: role:president_director
+    canonical: President Director
+    aliases:
+      - Presdir
+      - Direktur Utama Perusahaan
+      - President & CEO
+
+  - role_id: role:vice_president_director
+    canonical: Vice President Director
+    aliases:
+      - Wakil Direktur Utama
+      - Wadirut
+
+  - role_id: role:treasurer
+    canonical: Treasurer
+    aliases:
+      - Bendahara
+      - Bendahara Umum
+      - Chief Treasurer
+      - Treasurer General
+
+  - role_id: role:secretary
+    canonical: Secretary
+    aliases:
+      - Sekretaris
+      - Sekretaris Umum
+      - Secretary General (non-governmental)
+
+  - role_id: role:vice_chairman
+    canonical: Vice Chairman
+    aliases:
+      - Wakil Ketua
+      - Vice Chair
+      - Co-Chair
+      - Deputy Chairman
+
+  - role_id: role:founder
+    canonical: Founder
+    aliases:
+      - Pendiri
+      - Co-Founder
+      - Founding Director
+      - Founding Member
+
+  - role_id: role:partner
+    canonical: Partner
+    aliases:
+      - Mitra
+      - Senior Partner
+      - Managing Partner
+      - Rekan
+
+  - role_id: role:head_of_division
+    canonical: Head of Division
+    aliases:
+      - Kepala Divisi
+      - Division Head
+      - Kepala Bagian
+      - Kabag
+      - Department Manager
+
+  - role_id: role:regional_head
+    canonical: Regional Head
+    aliases:
+      - Kepala Wilayah
+      - Regional Manager
+      - Area Head
+      - Kepala Regional
+
+  # ── Academic / Research ──────────────────────────────────────────────────────
+
   - role_id: role:rector
     canonical: Rector
     aliases:
       - Rektor
       - University Rector
       - Vice-Chancellor
+
+  - role_id: role:vice_rector
+    canonical: Vice Rector
+    aliases:
+      - Wakil Rektor
+      - Warek
+      - Pro-Vice-Chancellor
+      - Deputy Rector
+
+  - role_id: role:dean
+    canonical: Dean
+    aliases:
+      - Dekan
+      - Dean of Faculty
+      - Faculty Dean
+
+  - role_id: role:professor
+    canonical: Professor
+    aliases:
+      - Guru Besar
+      - Prof.
+      - Full Professor
+      - Professor Emeritus
+      - Profesor
+
+  - role_id: role:researcher
+    canonical: Researcher
+    aliases:
+      - Peneliti
+      - Senior Researcher
+      - Research Fellow
+      - Periset
+
+  - role_id: role:head_of_research
+    canonical: Head of Research
+    aliases:
+      - Kepala Penelitian
+      - Research Director
+      - Head of R&D
+      - Kepala Litbang
+
+  # ── Civil Society / Party ────────────────────────────────────────────────────
+
+  - role_id: role:party_chair
+    canonical: Party Chairman
+    aliases:
+      - Ketua Partai
+      - Ketua Umum Partai
+      - Party Leader
+      - General Chairman
+
+  - role_id: role:party_secretary_general
+    canonical: Party Secretary General
+    aliases:
+      - Sekjen Partai
+      - Sekretaris Jenderal Partai
+
+  - role_id: role:party_treasurer
+    canonical: Party Treasurer
+    aliases:
+      - Bendahara Partai
+      - Bendahara Umum Partai
+
+  - role_id: role:ngo_director
+    canonical: NGO Director
+    aliases:
+      - Direktur LSM
+      - Executive Director of NGO
+      - Direktur Eksekutif LSM
+
+  - role_id: role:activist
+    canonical: Activist
+    aliases:
+      - Aktivis
+      - Civil Society Activist
+      - Human Rights Activist
+
+  - role_id: role:union_leader
+    canonical: Union Leader
+    aliases:
+      - Ketua Serikat
+      - Ketua Buruh
+      - Union President
+      - Trade Union Leader
+
+  # ── Religious ────────────────────────────────────────────────────────────────
+
+  - role_id: role:mui_chair
+    canonical: MUI Chairman
+    aliases:
+      - Ketua MUI
+      - Chairman of the Indonesian Ulema Council
+
+  - role_id: role:nu_chair
+    canonical: NU Chairman
+    aliases:
+      - Ketua PBNU
+      - Ketua Nahdlatul Ulama
+      - General Chairman of Nahdlatul Ulama
+
+  - role_id: role:muhammadiyah_chair
+    canonical: Muhammadiyah Chairman
+    aliases:
+      - Ketua Muhammadiyah
+      - Ketua PP Muhammadiyah
+
+  - role_id: role:religious_leader
+    canonical: Religious Leader
+    aliases:
+      - Ulama
+      - Kyai
+      - Kiai
+      - Ustaz
+      - Ustadz
+      - Imam
+      - Pemuka Agama
+      - Tokoh Agama
+
+  # ── Health / Professional Bodies ────────────────────────────────────────────
+
+  - role_id: role:doctor
+    canonical: Doctor
+    aliases:
+      - Dokter
+      - Physician
+      - dr.
+      - Medical Doctor
+
+  - role_id: role:director_hospital
+    canonical: Hospital Director
+    aliases:
+      - Direktur Rumah Sakit
+      - Dirut RS
+      - Hospital Chief Executive
+
+  - role_id: role:head_of_agency
+    canonical: Head of Agency
+    aliases:
+      - Kepala Badan
+      - Kepala Lembaga
+      - Agency Head
+      - Kaban
+
+  - role_id: role:head_of_bureau
+    canonical: Head of Bureau
+    aliases:
+      - Kepala Biro
+      - Bureau Chief
+      - Kabiro
+
+  - role_id: role:inspector_general
+    canonical: Inspector General
+    aliases:
+      - Inspektur Jenderal
+      - Irjen
+      - Inspector-General
 

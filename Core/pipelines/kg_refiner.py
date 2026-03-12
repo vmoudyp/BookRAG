@@ -154,6 +154,30 @@ class KGRefiner:
             or entity_id
         )
 
+        # Merge role_assignments: union with deduplication on (role_id or role_name, scope)
+        merged_roles = list(primary_entity.role_assignments)
+        existing_keys = {
+            (ra.role_id or ra.role_name.lower(), (ra.scope_entity_name or "").lower())
+            for ra in merged_roles
+        }
+        for ra in secondary_entity.role_assignments:
+            key = (ra.role_id or ra.role_name.lower(), (ra.scope_entity_name or "").lower())
+            if key not in existing_keys:
+                merged_roles.append(ra)
+                existing_keys.add(key)
+            else:
+                # Union source_ids on the existing assignment
+                for existing in merged_roles:
+                    ekey = (
+                        existing.role_id or existing.role_name.lower(),
+                        (existing.scope_entity_name or "").lower(),
+                    )
+                    if ekey == key:
+                        existing.source_ids = sorted(
+                            set(existing.source_ids) | set(ra.source_ids)
+                        )
+                        break
+
         return Entity(
             entity_name=entity_name or primary_entity.entity_name,
             entity_type=entity_type or primary_entity.entity_type,
@@ -167,6 +191,7 @@ class KGRefiner:
             ),
             ontology_source=primary_entity.ontology_source or secondary_entity.ontology_source,
             source_ids=set(primary_entity.source_ids).union(secondary_entity.source_ids),
+            role_assignments=merged_roles,
         )
 
     def entity_merge(
@@ -551,6 +576,37 @@ class KGRefiner:
         ranked_results = sorted(
             zip(similar_entities, scores), key=lambda x: x[1], reverse=True
         )
+
+        # Role-id boost: if a candidate shares at least one confirmed/suggested role_id
+        # with the incoming entity, add a small bonus so it rises above the gradient cut.
+        ROLE_BOOST = 0.05
+        incoming_role_ids = {
+            ra.role_id
+            for ra in entity.role_assignments
+            if ra.role_id and ra.review_status != "rejected"
+        }
+        if incoming_role_ids:
+            boosted: list = []
+            for ent_hit, score in ranked_results:
+                ent_name = ent_hit["metadata"].get("entity_name", "")
+                ent_type = ent_hit["metadata"].get("entity_type", "")
+                try:
+                    candidate = self.graph_index.get_entity(ent_name, ent_type)
+                    cand_role_ids = {
+                        ra.role_id
+                        for ra in candidate.role_assignments
+                        if ra.role_id and ra.review_status != "rejected"
+                    }
+                    if incoming_role_ids & cand_role_ids:
+                        score = min(1.0, score + ROLE_BOOST)
+                        log.debug(
+                            f"Role-id boost applied to candidate '{ent_name}' "
+                            f"(shared role_ids: {incoming_role_ids & cand_role_ids})"
+                        )
+                except Exception:
+                    pass
+                boosted.append((ent_hit, score))
+            ranked_results = sorted(boosted, key=lambda x: x[1], reverse=True)
 
         # 4.1 max score < 0.5 not similar enough, return empty list
         if not ranked_results or ranked_results[0][1] < 0.5:

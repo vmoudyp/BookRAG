@@ -779,3 +779,132 @@ async def delete_role_assignment(
     })
     return result
 
+
+# ── Role curation export ──────────────────────────────────────────────────────
+
+def _list_roles_sync(
+    tenant_id: str, doc_id: str, config_path: str,
+    review_status: Optional[str] = None,
+    entity_type: Optional[str] = None,
+) -> List[dict]:
+    """Collect all role assignments across every entity in the graph.
+
+    Optionally filter by ``review_status`` and/or ``entity_type``.
+    Returns a flat list of dicts suitable for the ``RoleListResponse.roles`` field.
+    """
+    graph, _, _ = _load_graph_sync(tenant_id, doc_id, config_path)
+    rows: List[dict] = []
+    for node_name, node_data in graph.kg.nodes(data=True):
+        ent_name = node_data.get("entity_name", "")
+        ent_type = node_data.get("entity_type", "")
+        if entity_type and ent_type.upper() != entity_type.upper():
+            continue
+        role_assignments = node_data.get("role_assignments", [])
+        for ra in role_assignments:
+            # ra may be a RoleAssignment object or a plain dict (depending on graph state)
+            if hasattr(ra, "model_dump"):
+                ra_dict = ra.model_dump()
+            else:
+                ra_dict = dict(ra)
+            if review_status and ra_dict.get("review_status") != review_status:
+                continue
+            rows.append({
+                "entity_name": ent_name,
+                "entity_type": ent_type,
+                **ra_dict,
+            })
+    return rows
+
+
+def _bulk_review_roles_sync(
+    tenant_id: str, doc_id: str, config_path: str,
+    reviews: List[dict], user_id: str,
+) -> dict:
+    """Apply multiple role review actions in a single graph load/save cycle.
+
+    ``reviews`` is a list of dicts with keys:
+        entity_name, entity_type, assignment_id, review_status,
+        role_name (optional), role_id (optional)
+
+    Returns ``{"processed": int, "errors": list[dict]}``.
+    """
+    graph, save_path, falkordb_cfg = _load_graph_sync(tenant_id, doc_id, config_path)
+    processed = 0
+    errors: List[dict] = []
+
+    for item in reviews:
+        ent_name = item["entity_name"]
+        ent_type = item["entity_type"]
+        assignment_id = item["assignment_id"]
+        new_status = item["review_status"]
+        override_name = item.get("role_name")
+        override_id = item.get("role_id")
+
+        try:
+            entity = graph.get_entity(ent_name, ent_type)
+            found = False
+            for ra in entity.role_assignments:
+                if ra.assignment_id == assignment_id:
+                    ra.review_status = new_status
+                    if override_name:
+                        ra.role_name = override_name
+                    if override_id:
+                        ra.role_id = override_id
+                    found = True
+                    break
+            if not found:
+                errors.append({
+                    "assignment_id": assignment_id,
+                    "entity_name": ent_name,
+                    "error": "assignment_id not found",
+                })
+                continue
+            graph.update_entity(ent_name, ent_type, entity)
+            processed += 1
+        except KeyError:
+            errors.append({
+                "assignment_id": assignment_id,
+                "entity_name": ent_name,
+                "error": f"entity '{ent_name}' ({ent_type}) not found",
+            })
+        except Exception as exc:
+            errors.append({
+                "assignment_id": assignment_id,
+                "entity_name": ent_name,
+                "error": str(exc),
+            })
+
+    if processed:
+        graph.save_to_dir(save_path)
+
+    return {"processed": processed, "errors": errors}
+
+
+async def list_roles(
+    tenant_id: str, doc_id: str, config_path: str,
+    review_status: Optional[str] = None,
+    entity_type: Optional[str] = None,
+) -> List[dict]:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _executor, _list_roles_sync,
+        tenant_id, doc_id, config_path, review_status, entity_type,
+    )
+
+
+async def bulk_review_roles(
+    tenant_id: str, doc_id: str, config_path: str,
+    reviews: List[dict], user_id: str,
+) -> dict:
+    async with _get_lock(tenant_id, doc_id):
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, _bulk_review_roles_sync,
+            tenant_id, doc_id, config_path, reviews, user_id,
+        )
+    await db.log_entity_edit(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+        "operation": "bulk_review_roles", "doc_id": doc_id, "user_id": user_id,
+        "processed": result["processed"],
+    })
+    return result
+

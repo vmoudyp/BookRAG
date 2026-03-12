@@ -1,5 +1,6 @@
 from collections import defaultdict
 from typing import Any, List, Dict, Optional
+import re
 
 from Core.Index.Tree import TreeNode, NodeType
 from Core.rag.base_rag import BaseRAG
@@ -606,6 +607,178 @@ class GBCRAG(BaseRAG):
         tree_data = self.gbc_index.TreeIndex.get_nodes_data(tree_node_ids)
         self._process_retrieved_nodes(tree_data, iter_context)
 
+        # Role-aware augmentation: if the sub-query looks role-oriented, inject structured
+        # role evidence alongside graph data so the answer agent can reference it.
+        if self._is_role_query(iter_context.sub_query):
+            iter_context.role_evidence = self._query_role_context(
+                iter_context.sub_query, res_entities
+            )
+
+    # ------------------------------------------------------------------ #
+    #  Role-aware retrieval helpers                                        #
+    # ------------------------------------------------------------------ #
+
+    _ROLE_QUERY_PATTERNS = re.compile(
+        r"\b("
+        r"who (is|was|are|were|holds?|held|serves? as|served as)|"
+        r"what (role|position|title|post) (does|did|do)|"
+        r"which (person|entity|organization|official|minister|director|head)|"
+        r"role of|position of|title of|"
+        r"minister|president|governor|director|chairman|secretary|ambassador|"
+        r"ceo|chief executive|head of|commissioner"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+    def _is_role_query(self, query: str) -> bool:
+        """Return True if the query appears to be asking about a person's role or title."""
+        return bool(self._ROLE_QUERY_PATTERNS.search(query))
+
+    def _query_role_context(
+        self, sub_query: str, entity_node_names: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Return structured role evidence for entities relevant to *sub_query*.
+
+        Strategy:
+        1. Try a FalkorDB HAS_ROLE Cypher query when the graph is FalkorDB-backed.
+        2. Fall back to reading ``role_assignments`` directly from the in-memory graph.
+
+        Returns a list of dicts with keys:
+            entity_name, entity_type, role_name, role_id, scope, tenure_status,
+            review_status, start_date, end_date, confidence, evidence_text
+        """
+        evidence: List[Dict[str, Any]] = []
+
+        graph_index = self.gbc_index.GraphIndex
+
+        # ── Strategy 1: FalkorDB ──────────────────────────────────────────
+        if graph_index.use_falkordb and entity_node_names:
+            try:
+                fdb_g = graph_index._get_fdb_graph()
+                # Build a small filter of entity node names for the Cypher query
+                name_filter = ", ".join(
+                    f"'{n.replace(chr(39), '')}'" for n in entity_node_names[:20]
+                )
+                cypher = (
+                    f"MATCH (e:Entity)-[r:HAS_ROLE]->(role:RoleNode) "
+                    f"WHERE e.node_name IN [{name_filter}] "
+                    f"RETURN e.node_name, e.entity_name, e.entity_type, "
+                    f"role.role_name, role.role_id, "
+                    f"r.scope_entity_name, r.tenure_status, r.review_status, "
+                    f"r.start_date, r.end_date, r.confidence"
+                )
+                result = fdb_g.query(cypher)
+                for row in result.result_set:
+                    (
+                        node_name, ent_name, ent_type,
+                        role_name, role_id,
+                        scope, tenure, review,
+                        start_d, end_d, conf,
+                    ) = row
+                    if review in ("rejected",):
+                        continue
+                    evidence.append({
+                        "entity_name": ent_name,
+                        "entity_type": ent_type,
+                        "role_name": role_name,
+                        "role_id": role_id or "",
+                        "scope": scope or "",
+                        "tenure_status": tenure or "",
+                        "review_status": review or "",
+                        "start_date": start_d or "",
+                        "end_date": end_d or "",
+                        "confidence": float(conf or 0.0),
+                        "evidence_text": "",
+                    })
+                log.info(
+                    f"Role context: FalkorDB returned {len(evidence)} role record(s) "
+                    f"for {len(entity_node_names)} entity node(s)."
+                )
+                return evidence
+            except Exception as exc:
+                log.warning(f"FalkorDB HAS_ROLE query failed, falling back to in-memory: {exc}")
+
+        # ── Strategy 2: in-memory NetworkX graph ──────────────────────────
+        for node_name in entity_node_names:
+            try:
+                entity = graph_index.get_entity_by_node_name(node_name)
+            except KeyError:
+                continue
+            for ra in entity.role_assignments:
+                if ra.review_status == "rejected":
+                    continue
+                # Pull first evidence text if available
+                ev_text = ""
+                if ra.evidence:
+                    ev_text = ra.evidence[0].evidence_text or ""
+                evidence.append({
+                    "entity_name": entity.entity_name,
+                    "entity_type": entity.entity_type,
+                    "role_name": ra.role_name,
+                    "role_id": ra.role_id or "",
+                    "scope": ra.scope_entity_name or "",
+                    "tenure_status": ra.tenure_status,
+                    "review_status": ra.review_status,
+                    "start_date": ra.start_date or "",
+                    "end_date": ra.end_date or "",
+                    "confidence": float(ra.confidence or 0.0),
+                    "evidence_text": ev_text,
+                })
+
+        log.info(
+            f"Role context: in-memory graph returned {len(evidence)} role record(s) "
+            f"for {len(entity_node_names)} entity node(s)."
+        )
+        return evidence
+
+    @staticmethod
+    def _enrich_entities_with_roles(
+        entity_nodes: List[Dict[str, Any]],
+        role_evidence: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Attach a ``role_summary`` string to each entity dict that has matching role evidence.
+
+        The enriched dicts are consumed by ``AnswerAgent.answer_simple_question`` which
+        already renders ``entity_name`` and ``entity_type``; any additional key with prefix
+        ``role_`` is passed through as supplementary context.
+        """
+        if not role_evidence:
+            return entity_nodes
+
+        # Build a lookup: lower-cased entity_name → list of role dicts
+        role_by_name: Dict[str, List[Dict[str, Any]]] = {}
+        for r in role_evidence:
+            key = (r.get("entity_name") or "").lower()
+            role_by_name.setdefault(key, []).append(r)
+
+        enriched: List[Dict[str, Any]] = []
+        for node in entity_nodes:
+            node = dict(node)  # shallow copy – don't mutate caller's data
+            ent_key = (node.get("entity_name") or "").lower()
+            roles = role_by_name.get(ent_key, [])
+            if roles:
+                parts = []
+                for r in roles:
+                    role_desc = r.get("role_name", "")
+                    scope = r.get("scope", "")
+                    tenure = r.get("tenure_status", "")
+                    start = r.get("start_date", "")
+                    end = r.get("end_date", "")
+                    ev_text = r.get("evidence_text", "")
+                    line = role_desc
+                    if scope:
+                        line += f" ({scope})"
+                    if tenure:
+                        line += f" [{tenure}]"
+                    if start or end:
+                        line += f" {start}–{end}".strip("–").strip()
+                    if ev_text:
+                        line += f': "{ev_text}"'
+                    parts.append(line)
+                node["role_summary"] = "; ".join(parts)
+            enriched.append(node)
+        return enriched
+
     def _retrieve(
         self,
         query: str,
@@ -645,10 +818,13 @@ class GBCRAG(BaseRAG):
             current_step = SubStep(sub_query=query, sub_number=1)
             self._retrieve(query, current_step)
 
+            entities = self._enrich_entities_with_roles(
+                current_step.iteration_graph_nodes, current_step.role_evidence
+            )
             final_answer, partial_answers = self.answer.answer_simple_question(
                 query=query,
                 retrieved_nodes=current_step.retrieval_nodes,
-                entities=current_step.iteration_graph_nodes,
+                entities=entities,
             )
             current_step.partial_answers = partial_answers
             current_step.generated_answer = final_answer
@@ -670,10 +846,13 @@ class GBCRAG(BaseRAG):
                 current_step = SubStep(sub_query=sub_question, sub_number=i + 1)
                 self._retrieve(sub_question, current_step)
 
+                entities = self._enrich_entities_with_roles(
+                    current_step.iteration_graph_nodes, current_step.role_evidence
+                )
                 sub_answer, partial_answers = self.answer.answer_simple_question(
                     query=sub_question,
                     retrieved_nodes=current_step.retrieval_nodes,
-                    entities=current_step.iteration_graph_nodes,
+                    entities=entities,
                 )
                 current_step.partial_answers = partial_answers
                 current_step.generated_answer = sub_answer

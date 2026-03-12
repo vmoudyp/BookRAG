@@ -689,3 +689,61 @@ class EntityOperationResponse(BaseModel):
     message: str = Field(..., description="Human-readable operation summary.")
     entities: List[EntityInfo] = Field(default_factory=list, description="Updated or created entities returned by the operation.")
 
+
+class RoleListResponse(BaseModel):
+    """Response for GET /{doc_id}/roles — filtered list of role assignments."""
+
+    doc_id: str
+    total: int = Field(..., description="Total number of role assignments returned.")
+    roles: List[dict] = Field(
+        default_factory=list,
+        description=(
+            "Each item contains entity_name, entity_type, and the role assignment "
+            "fields (assignment_id, role_name, role_id, scope_entity_name, tenure_status, "
+            "review_status, start_date, end_date, confidence, origin, source_ids)."
+        ),
+    )
+
+
+class BulkReviewItem(BaseModel):
+    """One item in a bulk-review request."""
+
+    entity_name: str = Field(..., description="Name of the entity that owns the assignment.")
+    entity_type: str = Field(..., description="Type of the entity.")
+    assignment_id: str = Field(..., description="UUID of the role assignment to review.")
+    review_status: str = Field(
+        ...,
+        description="New review status: confirmed | disputed | rejected.",
+        pattern="^(confirmed|disputed|rejected)$",
+    )
+    role_name: Optional[str] = Field(
+        None,
+        description="Override canonical role name when confirming (optional).",
+    )
+    role_id: Optional[str] = Field(
+        None,
+        description="Override canonical role_id when confirming (optional).",
+    )
+
+
+class BulkReviewRolesRequest(BaseModel):
+    """Request body for POST /{doc_id}/roles/bulk-review."""
+
+    reviews: List[BulkReviewItem] = Field(
+        ...,
+        min_length=1,
+        description="List of role assignments to review in one shot.",
+    )
+
+
+class BulkReviewRolesResponse(BaseModel):
+    """Response for POST /{doc_id}/roles/bulk-review."""
+
+    success: bool
+    message: str
+    processed: int = Field(..., description="Number of assignments successfully processed.")
+    errors: List[dict] = Field(
+        default_factory=list,
+        description="Any per-item errors; items with errors are skipped but the rest succeed.",
+    )
+
