@@ -14,6 +14,21 @@ import logging
 log = logging.getLogger(__name__)
 
 
+def _is_body_text_leaf(node) -> bool:
+    if node.type != NodeType.TEXT or not node.is_leaf():
+        return False
+
+    meta_info = getattr(node, "meta_info", None)
+    if meta_info is None:
+        return False
+
+    if getattr(meta_info, "source_role", None) != "body_text":
+        return False
+
+    content = getattr(meta_info, "content", None)
+    return bool(str(content or "").strip())
+
+
 def build_knowledge_graph(tree: DocumentTree, cfg: SystemConfig):
     """
     Build a knowledge graph from the given document tree.
@@ -39,8 +54,14 @@ def build_knowledge_graph(tree: DocumentTree, cfg: SystemConfig):
     else:
         variant = None
 
-    # Pass FalkorDB config when tenant/doc IDs are set
-    falkordb_cfg = cfg.falkordb if (cfg.tenant_id and cfg.doc_id) else None
+    # Pass FalkorDB config only when tenant/doc IDs are set AND the FalkorDB host env
+    # var is configured.  This mirrors the guard in api/services/indexing.py: when
+    # BOOKRAG_FALKORDB_HOST is not set, cfg.falkordb may still be a plain dict loaded
+    # from the YAML (Pydantic uses Any type), so we must not forward it as a
+    # FalkorDBConfig object — doing so causes AttributeError at graph_name_for_doc().
+    import os as _os
+    _fdb_host = _os.getenv("BOOKRAG_FALKORDB_HOST", "")
+    falkordb_cfg = cfg.falkordb if (cfg.tenant_id and cfg.doc_id and _fdb_host) else None
     graph_index = Graph(
         save_path=cfg.save_path,
         variant=variant,
@@ -63,24 +84,71 @@ def build_knowledge_graph(tree: DocumentTree, cfg: SystemConfig):
     kg_extract_res = []
 
     log.info("Batch processing is enabled for knowledge graph extraction.")
-    batch_nodes = []
+    text_extraction_scope = getattr(cfg.graph, "text_extraction_scope", "legacy")
     batch_title_nodes = []
     batch_title_paths = []
     batch_sibling_nodes = []
-    for node in tree.nodes:
-        if node == tree.root_node:
-            continue
-        if node.type == NodeType.TITLE:
-            title_path = tree.get_path_from_root(node.index_id)
-            sibling_nodes = tree.get_sibling_nodes(node.index_id)
-            batch_title_nodes.append(node)
-            batch_title_paths.append(title_path)
-            batch_sibling_nodes.append(sibling_nodes)
-        else:
-            batch_nodes.append(node)
+
+    if text_extraction_scope == "body_text_leaves":
+        scoped_text_nodes = []
+        skipped_text_nodes = 0
+        skipped_non_text_nodes = 0
+
+        for node in tree.nodes:
+            if node == tree.root_node:
+                continue
+            if node.type == NodeType.TITLE:
+                title_path = tree.get_path_from_root(node.index_id)
+                sibling_nodes = tree.get_sibling_nodes(node.index_id)
+                batch_title_nodes.append(node)
+                batch_title_paths.append(title_path)
+                batch_sibling_nodes.append(sibling_nodes)
+            elif _is_body_text_leaf(node):
+                scoped_text_nodes.append(node)
+            elif node.type == NodeType.TEXT:
+                skipped_text_nodes += 1
+            else:
+                skipped_non_text_nodes += 1
+
+        log.info(
+            "Tree-aware KG plan: %s title nodes, %s body-text leaf nodes selected, %s text nodes skipped, %s non-text nodes skipped under scope '%s'.",
+            len(batch_title_nodes),
+            len(scoped_text_nodes),
+            skipped_text_nodes,
+            skipped_non_text_nodes,
+            text_extraction_scope,
+        )
+    else:
+        scoped_text_nodes = []
+        text_internal_nodes = []
+        non_text_nodes = []
+        for node in tree.nodes:
+            if node == tree.root_node:
+                continue
+            if node.type == NodeType.TITLE:
+                title_path = tree.get_path_from_root(node.index_id)
+                sibling_nodes = tree.get_sibling_nodes(node.index_id)
+                batch_title_nodes.append(node)
+                batch_title_paths.append(title_path)
+                batch_sibling_nodes.append(sibling_nodes)
+            elif node.type == NodeType.TEXT:
+                if node.is_leaf():
+                    scoped_text_nodes.append(node)
+                else:
+                    text_internal_nodes.append(node)
+            else:
+                non_text_nodes.append(node)
+
+        log.info(
+            "Tree-aware KG plan: %s title nodes, %s text leaf nodes, %s text internal nodes, %s non-text nodes.",
+            len(batch_title_nodes),
+            len(scoped_text_nodes),
+            len(text_internal_nodes),
+            len(non_text_nodes),
+        )
 
     if batch_title_nodes:
-        log.info("Processing title nodes in batches...")
+        log.info("Processing title nodes with tree-first BERT extraction...")
         res_dict = kg_extractor.batch_extract_titles(
             nodes=batch_title_nodes,
             title_paths=batch_title_paths,
@@ -88,10 +156,24 @@ def build_knowledge_graph(tree: DocumentTree, cfg: SystemConfig):
         )
         kg_extract_res.extend(res_dict)
 
-    if batch_nodes:
-        log.info("Processing non-title nodes in batches...------")
-        res_dict = kg_extractor.batch_extract_kg(nodes=batch_nodes)
+    if scoped_text_nodes:
+        if text_extraction_scope == "body_text_leaves":
+            log.info("Processing body-text leaf nodes with BERT extraction...")
+        else:
+            log.info("Processing text leaf nodes with BERT extraction...")
+        res_dict = kg_extractor.batch_extract_kg(nodes=scoped_text_nodes)
         kg_extract_res.extend(res_dict)
+
+    if text_extraction_scope != "body_text_leaves":
+        if text_internal_nodes:
+            log.info("Processing non-leaf text nodes with BERT extraction...")
+            res_dict = kg_extractor.batch_extract_kg(nodes=text_internal_nodes)
+            kg_extract_res.extend(res_dict)
+
+        if non_text_nodes:
+            log.info("Processing non-text nodes with the structured/visual extractor...")
+            res_dict = kg_extractor.batch_extract_kg(nodes=non_text_nodes)
+            kg_extract_res.extend(res_dict)
 
     kg_extract_res.sort(key=lambda x: x.get("node_idx", -1))
 

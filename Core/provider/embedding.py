@@ -188,19 +188,39 @@ class GmeEmbeddingProvider(BaseEmbedder):
         """关闭GmeEmbeddingProvider并释放资源。"""
         log.info(f"Closing GmeEmbeddingProvider for model: {self.model_name}...")
 
+        self._release_resources(reset_initialized=True)
+
+        log.info("GmeEmbeddingProvider closed.")
+
+    def _release_resources(self, reset_initialized: bool = False) -> None:
+        """Release model resources and optionally mark the singleton reusable."""
         if hasattr(self, "model"):
             log.info("Releasing GME model resources...")
             del self.model
 
-            # 如果模型是加载到CUDA上的，清空缓存
-            if torch.cuda.is_available():
-                log.info("Embedder: Emptying CUDA cache.")
-                torch.cuda.empty_cache()
+        if reset_initialized:
+            self._initialized = False
 
-            gc.collect()
-            log.info("GME model resources released.")
+        # 如果模型是加载到CUDA上的，清空缓存
+        if torch.cuda.is_available():
+            log.info("Embedder: Emptying CUDA cache.")
+            torch.cuda.empty_cache()
 
-        log.info("GmeEmbeddingProvider closed.")
+        gc.collect()
+        log.info("GME model resources released.")
+
+    @classmethod
+    def close_instance(cls) -> None:
+        """Close and destroy the singleton instance at application shutdown."""
+        if cls._instance is None:
+            return
+
+        log.info(
+            f"Closing GmeEmbeddingProvider singleton for model: {cls._instance.model_name}..."
+        )
+        cls._instance._release_resources(reset_initialized=True)
+        cls._instance = None
+        log.info("GmeEmbeddingProvider singleton instance closed.")
 
     def clear_cache(self) -> None:
         """
@@ -495,35 +515,41 @@ class TextEmbeddingProvider(BaseEmbedder):
 
     @classmethod
     def close_instance(cls) -> None:
-        """
-        作为类方法，用于在程序结束时关闭单例并释放资源。
-        """
-        if cls._instance is not None:
-            log.info(
-                f"Closing GmeEmbeddingProvider singleton for model: {cls._instance.model_name}..."
-            )
-
-            if hasattr(cls._instance, "model"):
-                log.info("Releasing GME model resources...")
-                del cls._instance.model
-
-                if torch.cuda.is_available():
-                    log.info("Embedder: Emptying CUDA cache.")
-                    torch.cuda.empty_cache()
-
-                gc.collect()
-                log.info("GME model resources released.")
-
-            cls._instance = None  # 销毁实例
-            log.info("GmeEmbeddingProvider singleton instance closed.")
-
-    # (旧的 close 方法可以移除或保留，但不再建议实例级别调用)
-    def close(self) -> None:
-        """实例级别的 close 方法现在应提醒用户使用类方法。"""
+        """TextEmbeddingProvider is not a singleton; instances should be closed directly."""
         log.warning(
-            "Calling close() on a singleton instance is discouraged. Use GmeEmbeddingProvider.close_instance() at application shutdown."
+            "TextEmbeddingProvider is not a singleton. "
+            "Call close() on the instance you want to release."
         )
-        # 或者直接调用类方法： GmeEmbeddingProvider.close_instance()
+
+    def close(self) -> None:
+        """Release resources held by this text embedding provider instance."""
+        log.info(f"Closing TextEmbeddingProvider for model: {self.model_name}...")
+
+        if self.backend == "local":
+            if hasattr(self, "model"):
+                del self.model
+            if hasattr(self, "tokenizer"):
+                del self.tokenizer
+
+            if "cuda" in str(getattr(self, "device", "")).lower() and torch.cuda.is_available():
+                log.info("Embedder: Emptying CUDA cache.")
+                torch.cuda.empty_cache()
+
+            gc.collect()
+            log.info("Local text embedding resources released.")
+
+        elif self.backend == "openai":
+            close_client = getattr(getattr(self, "client", None), "close", None)
+            if callable(close_client):
+                close_client()
+            gc.collect()
+            log.info("OpenAI embedding client closed.")
+
+        elif self.backend == "ollama":
+            gc.collect()
+            log.info("Ollama embedding provider does not hold persistent local resources.")
+
+        log.info("TextEmbeddingProvider closed.")
 
     def _last_token_pool(
         self, last_hidden_states: torch.Tensor, attention_mask: torch.Tensor
@@ -660,7 +686,6 @@ if __name__ == "__main__":
     # Example usage
     text_embedder = TextEmbeddingProvider(
         model_name="Qwen/Qwen3-Embedding-0.6B",
-        # model_name="Qwen/Qwen3-Embedding-4B",
         backend="local",
         device="cuda:6",
     )
@@ -707,7 +732,3 @@ if __name__ == "__main__":
         instruction=MM_RERANKER_INSTRUCTION,
     )
     print("Rerank scores:", rerank_scores)
-
-    # clip_embedder = ChineseClipModel(model_name="ViT-B-16")
-    # image_embeddings = clip_embedder.embed_images(["path/to/image1.jpg", "path/to/image2.jpg"])
-    # print("Image embeddings shape:", image_embeddings.shape)

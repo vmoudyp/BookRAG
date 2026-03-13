@@ -13,6 +13,23 @@ log = logging.getLogger(__name__)
 _client: Optional[AsyncIOMotorClient] = None
 
 
+def _normalize_sub_tenant(sub_tenant: Optional[str]) -> Optional[str]:
+    value = str(sub_tenant or "").strip()
+    return value or None
+
+
+def _document_scope_filter(sub_tenant: Optional[str]) -> dict:
+    filters = [
+        {"sub_tenant": {"$exists": False}},
+        {"sub_tenant": None},
+        {"sub_tenant": ""},
+    ]
+    normalized = _normalize_sub_tenant(sub_tenant)
+    if normalized:
+        filters.append({"sub_tenant": normalized})
+    return {"$or": filters}
+
+
 def get_client(uri: str) -> AsyncIOMotorClient:
     global _client
     if _client is None:
@@ -54,6 +71,7 @@ async def ensure_indexes(uri: str, system_db: str, db_prefix: str, tenant_ids: L
         await tdb["users"].create_index("username", unique=True)
         await tdb["users"].create_index("user_id", unique=True)
         await tdb["documents"].create_index("doc_id", unique=True)
+        await tdb["documents"].create_index("sub_tenant")
         await tdb["permissions"].create_index(
             [("user_id", pymongo.ASCENDING), ("doc_id", pymongo.ASCENDING)],
             unique=True,
@@ -129,6 +147,7 @@ async def get_document_raw_path(uri: str, db_prefix: str, tenant_id: str, doc_id
 async def list_documents(
     uri: str, db_prefix: str, tenant_id: str, user_id: str,
     limit: int = 50, offset: int = 0,
+    sub_tenant: Optional[str] = None,
 ) -> tuple[list[dict], int]:
     """Return paginated docs accessible to *user_id*, sorted by document_date desc.
 
@@ -136,8 +155,16 @@ async def list_documents(
     fall back to ``created_at``; documents with neither sort last.
     """
     db = get_tenant_db(uri, db_prefix, tenant_id)
-    perm_cursor = db["permissions"].find({"user_id": user_id})
-    doc_ids = [p["doc_id"] async for p in perm_cursor]
+    doc_ids = await get_accessible_doc_ids(
+        uri,
+        db_prefix,
+        tenant_id,
+        user_id,
+        sub_tenant=sub_tenant,
+        include_permissions=False,
+    )
+    if not doc_ids:
+        return [], 0
     filt = {"doc_id": {"$in": doc_ids}}
     total = await db["documents"].count_documents(filt)
     cursor = (
@@ -171,10 +198,24 @@ async def grant_permission(uri: str, db_prefix: str, tenant_id: str, user_id: st
     )
 
 
-async def get_accessible_doc_ids(uri: str, db_prefix: str, tenant_id: str, user_id: str) -> List[str]:
+async def get_accessible_doc_ids(
+    uri: str,
+    db_prefix: str,
+    tenant_id: str,
+    user_id: str,
+    sub_tenant: Optional[str] = None,
+    include_permissions: bool = True,
+) -> List[str]:
     db = get_tenant_db(uri, db_prefix, tenant_id)
+    visible_doc_ids = await db["documents"].distinct(
+        "doc_id", _document_scope_filter(sub_tenant)
+    )
+    if not include_permissions:
+        return visible_doc_ids
+
     cursor = db["permissions"].find({"user_id": user_id})
-    return [p["doc_id"] async for p in cursor]
+    permission_doc_ids = [p["doc_id"] async for p in cursor]
+    return list(dict.fromkeys([*visible_doc_ids, *permission_doc_ids]))
 
 
 async def get_permission(uri: str, db_prefix: str, tenant_id: str, user_id: str, doc_id: str) -> Optional[dict]:

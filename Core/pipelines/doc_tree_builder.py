@@ -213,6 +213,32 @@ def _append_html_visual_blocks(
     return next_pdf_id
 
 
+def _extract_pdf_list_with_mineru(cfg: SystemConfig) -> list[dict]:
+    from Core.provider.extract_pdf_info import merge_middle_content, parse_doc
+
+    backend = cfg.mineru.backend
+    server_url = cfg.mineru.server_url
+    method = cfg.mineru.method
+    middle_json, content_list = parse_doc(
+        cfg.pdf_path,
+        output_dir=cfg.save_path,
+        backend=backend,
+        method=method,
+        server_url=server_url,
+        lang=cfg.mineru.lang,
+    )
+
+    file_name = str(Path(cfg.pdf_path).stem)
+    save_dir = os.path.join(cfg.save_path, method)
+    return merge_middle_content(
+        middle_json,
+        content_list,
+        parse_dir=os.path.join(cfg.save_path, method),
+        save_dir=save_dir,
+        file_name=file_name,
+    )
+
+
 def _append_html_section(
     tree_index: DocumentTree,
     parent_node: TreeNode,
@@ -337,6 +363,18 @@ def build_tree_from_source(cfg: SystemConfig, reforce: bool = False) -> Document
     return build_tree_from_pdf(cfg, reforce=reforce)
 
 
+def _rebuild_flat_tree_from_pdf_list(
+    cfg: SystemConfig, meta_dict: dict[str, Any], pdf_list: list[dict]
+) -> DocumentTree:
+    """Rebuild a flat tree directly from parsed blocks.
+
+    This is a last-resort recovery path used when outline/refinement logic
+    produces a degenerate root-only tree even though the parser returned blocks.
+    """
+    tree_index = DocumentTree(meta_dict=meta_dict, cfg=cfg)
+    return construct_tree_index(tree_index=tree_index, pdf_list=pdf_list, title_outline=[])
+
+
 def build_tree_from_preprocessed_html_json(
     cfg: SystemConfig, reforce: bool = False
 ) -> DocumentTree:
@@ -451,6 +489,28 @@ def construct_tree_index(
                 tree_index.add_node(child_node)
                 node.add_child(child_node)
 
+    # ── Flat-document fallback ────────────────────────────────────────────────
+    # When the LLM-based outline extractor rejects every candidate heading (e.g.
+    # because the document has no clear section structure), title_outline is empty
+    # and the loop above produces nothing.  In that case we attach every content
+    # block directly to the root so that kg_builder can still extract entities.
+    if not title_outline and pdf_list:
+        log.warning(
+            "No outline entries were extracted — falling back to flat document "
+            "structure.  All content blocks will be attached directly to the root node."
+        )
+        added_count = 0
+        for content in pdf_list:
+            content_type = content.get("type", "text")
+            # Skip empty text blocks
+            if content_type == "text" and not content.get("text", "").strip():
+                continue
+            child_node = create_node_by_type(pdf_content=content, isTitle=False)
+            tree_index.add_node(child_node)
+            tree_index.root_node.add_child(child_node)
+            added_count += 1
+        log.info(f"Flat fallback: added {added_count} content nodes directly to root.")
+
     log.info(f"Total {len(tree_index.nodes)} nodes added to the tree index.")
     return tree_index
 
@@ -487,8 +547,6 @@ def build_tree_from_pdf(cfg: SystemConfig, reforce: bool = False) -> DocumentTre
 
     tree_index = DocumentTree(meta_dict=meta_dict, cfg=cfg)
 
-    import json
-
     parser = getattr(cfg, "parser", "mineru") or "mineru"
     base_file_name = Path(cfg.pdf_path).stem
 
@@ -513,47 +571,49 @@ def build_tree_from_pdf(cfg: SystemConfig, reforce: bool = False) -> DocumentTre
         log.info(f"Extracting content from '{cfg.pdf_path}' using parser='{parser}' …")
 
         if parser == "docling":
-            from Core.provider.extract_pdf_info_docling import parse_doc_with_docling
-
-            pdf_list = parse_doc_with_docling(
-                pdf_path=cfg.pdf_path,
-                output_dir=cfg.save_path,
-                cfg=cfg.docling,
+            from Core.provider.extract_pdf_info_docling import (
+                is_known_docling_meta_tensor_error,
+                parse_doc_with_docling,
             )
+
+            try:
+                pdf_list = parse_doc_with_docling(
+                    pdf_path=cfg.pdf_path,
+                    output_dir=cfg.save_path,
+                    cfg=cfg.docling,
+                )
+                parser_used = "docling"
+            except Exception as exc:
+                if not is_known_docling_meta_tensor_error(exc):
+                    raise
+                log.warning(
+                    "Docling hit the known meta-tensor layout-model failure while "
+                    "parsing '%s'; falling back to MinerU. Error: %s",
+                    cfg.pdf_path,
+                    exc,
+                )
+                pdf_list = _extract_pdf_list_with_mineru(cfg)
+                parser_used = "mineru-fallback"
+
             # Persist for subsequent fast loads (mirrors what merge_middle_content
             # does for the MinerU path).
             docling_cache_dir = os.path.join(cfg.save_path, "docling")
             os.makedirs(docling_cache_dir, exist_ok=True)
             with open(tmp_save_path, "w", encoding="utf-8") as f:
                 json.dump(pdf_list, f, ensure_ascii=False, indent=4)
-            log.info(f"[Docling] Extracted content cached to '{tmp_save_path}'")
+            if parser_used == "docling":
+                log.info(f"[Docling] Extracted content cached to '{tmp_save_path}'")
+            else:
+                log.info(
+                    "[Docling→MinerU fallback] Extracted content cached to '%s'",
+                    tmp_save_path,
+                )
         else:
             # ── MinerU (default) ──────────────────────────────────────────
-            from Core.provider.extract_pdf_info import parse_doc, merge_middle_content
-
-            backend = cfg.mineru.backend
-            server_url = cfg.mineru.server_url
-            method = cfg.mineru.method
-
-            middle_json, content_list = parse_doc(
-                cfg.pdf_path,
-                output_dir=cfg.save_path,
-                backend=backend,
-                method=method,
-                server_url=server_url,
-                lang=cfg.mineru.lang,
-            )
-
-            file_name = str(Path(cfg.pdf_path).stem)
-            save_dir = os.path.join(cfg.save_path, method)
-            pdf_list = merge_middle_content(
-                middle_json,
-                content_list,
-                parse_dir=os.path.join(cfg.save_path, method),
-                save_dir=save_dir,
-                file_name=file_name,
-            )
+            pdf_list = _extract_pdf_list_with_mineru(cfg)
             log.info(f"[MinerU] Extracted content saved to '{tmp_save_path}'")
+
+    raw_pdf_list = list(pdf_list) if isinstance(pdf_list, list) else []
 
     llm = LLM(cfg.llm)
     vlm = VLM(cfg.vlm) if cfg.tree.use_vlm else None
@@ -567,6 +627,12 @@ def build_tree_from_pdf(cfg: SystemConfig, reforce: bool = False) -> DocumentTre
     tree_index = construct_tree_index(
         tree_index=tree_index, pdf_list=pdf_list, title_outline=title_outline
     )
+    if len(tree_index.nodes) <= 1 and raw_pdf_list:
+        log.warning(
+            "Tree construction produced a root-only tree; rebuilding a flat tree "
+            "from the raw parsed blocks so downstream NER can still run."
+        )
+        tree_index = _rebuild_flat_tree_from_pdf_list(cfg, meta_dict, raw_pdf_list)
     token_tracker = TokenTracker.get_instance()
     tree_index_cost = token_tracker.record_stage("tree_index_construction")
     log.info(f"Tree index construction cost: {tree_index_cost}")

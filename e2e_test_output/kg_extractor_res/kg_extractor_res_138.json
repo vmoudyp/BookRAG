@@ -4,9 +4,16 @@
       "entity_name": "6.1 setup",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of 'Experiments' within the BookRAG paper, this section details the experimental configuration, including baseline methods, evaluation metrics (efficiency and accuracy), and the document QA tasks used to assess the proposed approach.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         138
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [],

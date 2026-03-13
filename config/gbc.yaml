@@ -39,11 +39,20 @@ tree:
   node_summary: True
 
 graph:
-  extractor_type: "llm"
+  # Options: "llm" | "local" (spaCy English) | "hybrid" (BERT-only, no LLM for NER)
+  extractor_type: "hybrid"
   local_model_name: "en_core_web_sm"
-  image_description_force: True
-  max_gleaning: 1
-  refine_type: "advanced"
+  # Hugging Face model ID or existing local model directory for Indonesian NER.
+  # Public Hub IDs download on first use and are cached locally; local dirs support offline use.
+  hybrid_ner_model: "cahya/bert-base-indonesian-NER"
+  # Minimum BERT confidence score to accept an entity span (0.0–1.0)
+  ner_confidence_threshold: 0.5
+  image_description_force: False
+  max_gleaning: 0
+  text_extraction_scope: "body_text_leaves"
+  # "basic" uses name-based deduplication only — no remote embedding or reranker calls.
+  # Switch to "advanced" when a GPU-backed embedding + reranker service is available.
+  refine_type: "basic"
   embedding_config:
     model_name: text-embedding-v3
     backend: openai
@@ -61,26 +70,20 @@ graph:
 
 
 vdb:
-  mm_embedding: True
+  # mm_embedding requires CUDA; disabled for CPU-only local dev.
+  mm_embedding: False
   vdb_dir_name: "Tree_vdb"
   collection_name: "TreeVDB"
   embedding_config:
     model_name: Alibaba-NLP/gme-Qwen2-VL-2B-Instruct
-    device: "cuda:1"
+    device: "cpu"
 
 ontology:
   enabled: false
+  path: "./tree_ontology.yaml"
   mapping_threshold: 1.0
   allow_provisional_entities: true
   use_query_resolution: true
-  entities:
-    - ontology_id: "product:bookrag"
-      canonical_name: "bookrag"
-      entity_type: "PRODUCT"
-      description: "The BookRAG application and retrieval pipeline."
-      aliases:
-        - "book rag"
-        - "book-rag"
 
 entity_resolution:
   enabled: false

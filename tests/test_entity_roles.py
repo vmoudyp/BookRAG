@@ -16,6 +16,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+def _swap_modules(temp_modules: dict[str, ModuleType]) -> dict[str, ModuleType | None]:
+    previous = {name: sys.modules.get(name) for name in temp_modules}
+    sys.modules.update(temp_modules)
+    return previous
+
+
+def _restore_modules(previous: dict[str, ModuleType | None]) -> None:
+    for name, module in previous.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
 # ── 1. Stub out networkx (not installed in test env) ─────────────────────────
 _nx = ModuleType("networkx")
 # Graph.py uses: nx.DiGraph(), nx.Graph (type hint), nx.NetworkXError
@@ -27,20 +41,42 @@ _nx.readwrite.json_graph = SimpleNamespace(
     node_link_data=lambda *a, **kw: {"nodes": [], "links": []},
     node_link_graph=lambda *a, **kw: MagicMock(),
 )
-sys.modules["networkx"] = _nx
-sys.modules["networkx.readwrite"] = _nx.readwrite
-sys.modules["networkx.readwrite.json_graph"] = ModuleType("networkx.readwrite.json_graph")
+_fake_json_graph = ModuleType("networkx.readwrite.json_graph")
+_fake_json_graph.node_link_data = _nx.readwrite.json_graph.node_link_data
+_fake_json_graph.node_link_graph = _nx.readwrite.json_graph.node_link_graph
+_previous_networkx_modules = _swap_modules(
+    {
+        "networkx": _nx,
+        "networkx.readwrite": _nx.readwrite,
+        "networkx.readwrite.json_graph": _fake_json_graph,
+    }
+)
 
 # ── 2. Import the lightweight Pydantic models from Core.Index.Graph ──────────
 _graph_path = Path(__file__).resolve().parents[1] / "Core" / "Index" / "Graph.py"
-_graph_spec = importlib.util.spec_from_file_location("Core.Index.Graph", _graph_path)
+_graph_spec = importlib.util.spec_from_file_location("_test_core_index_graph", _graph_path)
 _graph_mod = importlib.util.module_from_spec(_graph_spec)
-sys.modules["Core.Index.Graph"] = _graph_mod
-_graph_spec.loader.exec_module(_graph_mod)  # type: ignore[union-attr]
+try:
+    _graph_spec.loader.exec_module(_graph_mod)  # type: ignore[union-attr]
+finally:
+    _restore_modules(_previous_networkx_modules)
 
 RoleEvidence = _graph_mod.RoleEvidence
 RoleAssignment = _graph_mod.RoleAssignment
 Entity = _graph_mod.Entity
+
+
+@pytest.fixture(autouse=True)
+def _install_stubbed_core_graph_module():
+    previous = sys.modules.get("Core.Index.Graph")
+    sys.modules["Core.Index.Graph"] = _graph_mod
+    try:
+        yield
+    finally:
+        if previous is None:
+            sys.modules.pop("Core.Index.Graph", None)
+        else:
+            sys.modules["Core.Index.Graph"] = previous
 
 # ── 3. Stub out api.* heavy modules ─────────────────────────────────────────
 _fake_deps = ModuleType("api.dependencies")
@@ -65,20 +101,34 @@ async def _noop_log(*a, **kw):
 _fake_db_mongo.log_entity_edit = _noop_log
 _fake_db.mongodb = _fake_db_mongo
 
-for _name, _mod in [
-    ("api", ModuleType("api")),
-    ("api.db", _fake_db),
-    ("api.db.mongodb", _fake_db_mongo),
-    ("api.dependencies", _fake_deps),
-]:
-    sys.modules.setdefault(_name, _mod)
+_fake_api = ModuleType("api")
+_fake_api.__path__ = []
+_fake_services = ModuleType("api.services")
+_fake_services.__path__ = []
+_previous_api_modules = _swap_modules(
+    {
+        "api": _fake_api,
+        "api.db": _fake_db,
+        "api.db.mongodb": _fake_db_mongo,
+        "api.dependencies": _fake_deps,
+        "api.services": _fake_services,
+    }
+)
 
 # ── 4. Import service module with stubs in place ─────────────────────────────
 _svc_path = Path(__file__).resolve().parents[1] / "api" / "services" / "entity_editor.py"
 _svc_spec = importlib.util.spec_from_file_location("api.services.entity_editor", _svc_path)
 _svc_mod = importlib.util.module_from_spec(_svc_spec)
+_svc_previous = sys.modules.get("api.services.entity_editor")
 sys.modules["api.services.entity_editor"] = _svc_mod
-_svc_spec.loader.exec_module(_svc_mod)  # type: ignore[union-attr]
+try:
+    _svc_spec.loader.exec_module(_svc_mod)  # type: ignore[union-attr]
+finally:
+    if _svc_previous is None:
+        sys.modules.pop("api.services.entity_editor", None)
+    else:
+        sys.modules["api.services.entity_editor"] = _svc_previous
+    _restore_modules(_previous_api_modules)
 
 _merge_roles = _svc_mod._merge_role_assignments
 _add_role_sync = _svc_mod._add_role_sync

@@ -29,7 +29,8 @@ CONFIG_PATH = os.getenv("BOOKRAG_CONFIG_PATH", "config/gbc.yaml")
     summary="Submit a chat query",
     description=(
         "Run a chat query against documents the caller can access. Requested `doc_ids` are "
-        "filtered by tenant/user permissions before retrieval. Visual sidecar request fields are "
+        "filtered by tenant visibility and explicit permissions before retrieval. Optional `sub_tenant` "
+        "expands retrieval from shared docs to shared+sub-tenant docs. Visual sidecar request fields are "
         "optional per-request overrides; omitted or `null` values keep the loaded `GBCRAGConfig` settings."
     ),
     responses={
@@ -41,7 +42,12 @@ async def query(req: ChatQueryRequest, current_user: dict = Depends(rate_limit_q
     tenant_id = current_user["tenant_id"]
     user_id = current_user["user_id"]
 
-    accessible_docs = await filter_accessible_docs(user_id, tenant_id, req.doc_ids)
+    accessible_docs = await filter_accessible_docs(
+        user_id,
+        tenant_id,
+        req.doc_ids,
+        sub_tenant=req.sub_tenant,
+    )
     if not accessible_docs:
         raise HTTPException(status_code=403, detail="No accessible documents for this query")
 
@@ -82,13 +88,21 @@ async def create_session(req: SessionCreateRequest, current_user: dict = Depends
     tenant_id = current_user["tenant_id"]
     user_id = current_user["user_id"]
     session_id = str(uuid.uuid4())
-    accessible_docs = await filter_accessible_docs(user_id, tenant_id, req.doc_ids)
-    await db.create_session(MONGO_URI, MONGO_DB_PREFIX, tenant_id, {
+    accessible_docs = await filter_accessible_docs(
+        user_id,
+        tenant_id,
+        req.doc_ids,
+        sub_tenant=req.sub_tenant,
+    )
+    session_data = {
         "session_id": session_id,
         "user_id": user_id,
         "doc_ids": accessible_docs,
         "messages": [],
-    })
+    }
+    if req.sub_tenant:
+        session_data["sub_tenant"] = req.sub_tenant
+    await db.create_session(MONGO_URI, MONGO_DB_PREFIX, tenant_id, session_data)
     return SessionResponse(session_id=session_id)
 
 

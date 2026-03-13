@@ -4,33 +4,61 @@
       "entity_name": "4.1 overview of bookindex",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of 'BOOKINDEX', this section provides a high-level introduction to the proposed BookIndex, defining its hierarchical structure-aware nature and outlining its two-stage construction process (Tree Construction and Graph Construction) for capturing logical hierarchies and entity relations in complex documents.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         50
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "bookindex",
       "entity_type": "MODEL_OR_ARCHITECTURE",
       "description": "A hierarchical structure-aware index designed to capture explicit logical hierarchy and intricate entity relations within complex documents, serving as the core subject of section 4.1.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         50
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "tree construction",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "The first stage of the BookIndex construction process, which parses document layout to establish hierarchical nodes categorized by type, detailed in section 4.1.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         50
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "graph construction",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "The second stage of the BookIndex construction process, which extracts fine-grained entity knowledge from tree nodes and refines it using gradient-based entity resolution, detailed in section 4.1.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         50
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

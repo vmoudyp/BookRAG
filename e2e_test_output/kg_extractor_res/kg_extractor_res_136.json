@@ -4,17 +4,31 @@
       "entity_name": "6 experiments",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of the paper 'BookRAG: A Hierarchical Structure-aware Index-based Approach for Retrieval-Augmented Generation on Complex Documents', this section details the empirical validation of the proposed BookRAG method, including experimental setup, benchmarks used, and performance results compared to baselines.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         136
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "experiments",
       "entity_type": "TASK_OR_PROBLEM",
       "description": "Refers to the systematic computational procedures and evaluations conducted to validate the effectiveness of the BookRAG approach, as described in section 6.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         136
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

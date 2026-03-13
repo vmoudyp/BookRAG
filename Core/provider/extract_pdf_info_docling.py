@@ -21,7 +21,7 @@ by the rest of the BookRAG pipeline.
 
 from __future__ import annotations
 
-import json
+from contextlib import contextmanager
 import logging
 import os
 from pathlib import Path
@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from Core.configs.docling_config import DoclingConfig
 
 log = logging.getLogger(__name__)
+
+_KNOWN_META_TENSOR_ERROR = "Cannot copy out of meta tensor; no data!"
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +73,8 @@ def parse_doc_with_docling(
     )
 
     log.info(f"[Docling] Converting '{pdf_path}' …")
-    conv_res = converter.convert(pdf_path)
+    with _patch_docling_layout_device_map():
+        conv_res = converter.convert(pdf_path)
     doc = conv_res.document
     doc_stem = Path(pdf_path).stem
 
@@ -175,13 +178,15 @@ def parse_doc_with_docling(
 
 def _build_pipeline_options(cfg: "DoclingConfig"):
     """Construct :class:`PdfPipelineOptions` from *cfg*."""
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.pipeline_options import AcceleratorDevice, PdfPipelineOptions
 
     opts = PdfPipelineOptions()
     opts.do_ocr = True
     opts.do_table_structure = True
     opts.generate_picture_images = True
     opts.images_scale = cfg.images_scale
+    opts.accelerator_options.device = AcceleratorDevice.CPU
+    opts.accelerator_options.num_threads = max(1, min(4, os.cpu_count() or 1))
 
     ocr_opts = _build_ocr_options(cfg)
     if ocr_opts is not None:
@@ -212,6 +217,61 @@ def _build_ocr_options(cfg: "DoclingConfig"):
             "Falling back to Docling's default OCR settings."
         )
     return None
+
+
+def is_known_docling_meta_tensor_error(exc: BaseException | None) -> bool:
+    """Return True when *exc* matches the known Docling layout-load meta error."""
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if _KNOWN_META_TENSOR_ERROR in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _torch_device_to_string(device) -> str:
+    device_type = getattr(device, "type", None)
+    device_index = getattr(device, "index", None)
+    if device_type is None:
+        return str(device)
+    if device_index is None:
+        return device_type
+    return f"{device_type}:{device_index}"
+
+
+@contextmanager
+def _patch_docling_layout_device_map():
+    """Normalize Docling's invalid ``torch.device`` device_map usage at runtime."""
+    try:
+        import torch
+        import docling_ibm_models.layoutmodel.layout_predictor as layout_predictor
+    except ImportError:
+        yield
+        return
+
+    original_from_pretrained = layout_predictor.AutoModelForObjectDetection.from_pretrained
+
+    def _patched_from_pretrained(*args, **kwargs):
+        device_map = kwargs.get("device_map")
+        if isinstance(device_map, torch.device):
+            normalized_device_map = _torch_device_to_string(device_map)
+            kwargs["device_map"] = normalized_device_map
+            log.info(
+                "[Docling] Normalized layout detector device_map from '%s' to '%s'.",
+                device_map,
+                normalized_device_map,
+            )
+        return original_from_pretrained(*args, **kwargs)
+
+    layout_predictor.AutoModelForObjectDetection.from_pretrained = _patched_from_pretrained
+    try:
+        yield
+    finally:
+        layout_predictor.AutoModelForObjectDetection.from_pretrained = (
+            original_from_pretrained
+        )
 
 
 def _get_page_idx(element) -> int:

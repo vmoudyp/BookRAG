@@ -387,7 +387,7 @@ Act as a precise Information Extraction system. Your task is to analyze a table'
     * `"description"`: A text providing the overall context of the table.
     * `"column_headers"`: A list of strings representing the headers of the table columns.
     You must carefully analyze **both** sources of information.
-    
+
 2.  **Identify the Primary Table Entity:** Your most important first step is to create an entity for the table itself.
   * Its `entity_type` **MUST** be `TABLE`.
   * It **MUST** be the very first object in the final `entities` list.
@@ -1199,7 +1199,7 @@ You will be given one "New Entity" recently extracted from a text. You will also
 4.  **Format the Output**: **You must provide your answer in a valid JSON format. The JSON object should contain two keys:**
     * `select_id`: An integer. The `id` of the candidate you've determined to be an exact match. If no exact match is found, this value MUST be `-1`.
     * `explanation`: A brief, one-sentence string explaining your reasoning. For a match, explain why they are the same entity. For no match, explain the key difference.
-    
+
 ---
 -Input Data Format-
 The input will be a JSON object containing the `new_entity` and a `candidate_entities` list.
@@ -1393,4 +1393,65 @@ Return ONLY a valid JSON object matching this schema:
     }}
   ]
 }}
+"""
+
+
+# Domain-specific entity types for the hybrid extractor's LLM pass.
+# These are types that BERT cannot detect but LLM can — financial, legal, and product terms.
+HYBRID_DOMAIN_ENTITY_TYPES = [
+    "MONEY",
+    "PERCENTAGE",
+    "LAW",
+    "PRODUCT",
+    "DATE",
+    "EVENT",
+    "MEASUREMENT",
+    "INSURANCE_PRODUCT",
+    "POLICY_CLAUSE",
+    "COVERAGE_TERM",
+    "PREMIUM",
+    "CURRENCY",
+    "TITLE",
+]
+
+RELATIONSHIP_EXTRACTION_FROM_ENTITIES = """-Goal-
+Given a text document and a pre-extracted list of entities (identified by a local NER model), your tasks are:
+1. Find all RELATIONSHIPS between the listed entities that are clearly stated in the text.
+2. Identify any DOMAIN-SPECIFIC entities that are NOT in the pre-extracted list but are important for understanding the document (e.g., financial values, legal references, insurance products, policy clauses).
+
+-Pre-extracted Entities-
+{entity_list}
+
+-Steps-
+Step 1: Find relationships between the pre-extracted entities.
+For each pair of entities that are clearly related in the provided text:
+- source_entity: must exactly match a name from the pre-extracted entity list above
+- target_entity: must exactly match a name from the pre-extracted entity list above
+- relationship_description: brief explanation based ONLY on the text
+- relationship_strength: numeric score 1–10
+Format: ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_strength>)
+
+Step 2: Find domain-specific entities NOT in the pre-extracted list.
+Focus only on these types: [{domain_entity_types}]
+Do NOT re-extract PERSON, ORGANIZATION, or LOCATION entities — those are already covered.
+For each new domain entity:
+- entity_name: as it appears in the text (preserve original language)
+- entity_type: one of the domain types listed above
+- entity_description: brief description based ONLY on the text
+Format: ("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+
+Step 3: Find relationships between pre-extracted entities and the new domain entities from Step 2.
+The source or target may be from either the pre-extracted list or your new domain entities.
+Use the same relationship format as Step 1.
+
+Step 4: Return all found entities (Step 2 only) and all relationships (Steps 1 and 3) as a single list.
+Use **{record_delimiter}** as the list delimiter.
+
+Step 5: When finished, output {completion_delimiter}
+
+######################
+-Text-
+{input_text}
+######################
+Output:
 """

@@ -30,8 +30,13 @@ router = APIRouter(prefix="/entities", tags=["entities"])
 CONFIG_PATH = os.getenv("BOOKRAG_CONFIG_PATH", "config/gbc.yaml")
 
 
-async def _require_access(tenant_id: str, user_id: str, doc_id: str):
-    if not await check_doc_access(user_id, tenant_id, doc_id):
+async def _require_access(
+    tenant_id: str,
+    user_id: str,
+    doc_id: str,
+    sub_tenant: Optional[str] = None,
+):
+    if not await check_doc_access(user_id, tenant_id, doc_id, sub_tenant=sub_tenant):
         raise HTTPException(status_code=403, detail="Access denied to this document")
 
 

@@ -4,41 +4,76 @@
       "entity_name": "bookrag: a hierarchical structure-aware index-based approach for retrieval-augmented generation on complex documents",
       "entity_type": "SECTION_TITLE",
       "description": "As the primary title of the document, this section introduces BookRAG, a novel approach designed to handle complex documents by utilizing hierarchical structure awareness and index-based mechanisms within a Retrieval-Augmented Generation framework.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         1
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "bookrag",
       "entity_type": "MODEL_OR_ARCHITECTURE",
       "description": "The specific name of the proposed model or architecture introduced in the document.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         1
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "hierarchical structure-aware index-based approach",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "The core methodology employed by BookRAG, focusing on leveraging document hierarchy and indexing strategies.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         1
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "retrieval-augmented generation",
       "entity_type": "TASK_OR_PROBLEM",
       "description": "The broader AI task domain addressed by the proposed approach, involving combining retrieval systems with generative models.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         1
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "complex documents",
       "entity_type": "DATASET_OR_CORPUS",
       "description": "The target data type or corpus category that the system is specifically designed to process.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         1
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

@@ -4,17 +4,31 @@
       "entity_name": "3.3 rag workflow",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of 'Preliminaries' within the BookRAG paper, this section details the general operational workflow of Retrieval-Augmented Generation (RAG) systems, serving as a foundational context for the proposed hierarchical approach.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         44
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "rag systems",
       "entity_type": "TECHNOLOGY",
       "description": "Refers to Retrieval-Augmented Generation systems, which are the subject of the workflow analysis detailed in section 3.3.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         44
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

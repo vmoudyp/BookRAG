@@ -293,3 +293,12 @@ Adopt the following default behavior:
 - preserve per-node provenance and perform document-level consolidation afterward
 
 This gives BookRAG a cleaner and more controllable entity extraction path with minimal disruption to the current architecture.
+
+## 16. Hybrid Indonesian NER model usage note
+
+When `graph.extractor_type: hybrid` is used:
+
+- `graph.hybrid_ner_model` may be either a public Hugging Face model ID such as `cahya/bert-base-indonesian-NER` or an extracted local model directory
+- public Hugging Face models do not require an API key for normal local inference in this repo
+- a public model ID is downloaded on first use and then loaded from the local Hugging Face cache on later runs
+- an existing local directory can be used for offline deployments; `~/...` and relative paths are resolved when they point to a real local folder

@@ -4,25 +4,46 @@
       "entity_name": "5 agent-based retrieval",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of the main paper 'BookRAG: A Hierarchical Structure-aware Index-based Approach for Retrieval-Augmented Generation on Complex Documents', this section details the proposed agent-based query method inspired by Information Foraging Theory, which dynamically classifies queries and employs a tailored retrieval workflow.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         78
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "agent-based query method",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "Refers to the specific retrieval strategy introduced in section 5, which utilizes agents to dynamically classify queries based on Information Foraging Theory.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         78
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "information foraging theory",
       "entity_type": "SCIENTIFIC_THEORY",
       "description": "The theoretical framework inspiring the design of the agent-based query method described in section 5.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         78
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

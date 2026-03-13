@@ -4,17 +4,31 @@
       "entity_name": "4.2 tree construction",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of 'BookIndex' and the first stage of its construction process, this section details the method for parsing document layouts to establish hierarchical nodes categorized by type.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         53
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "tree construction",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "The specific sequential process described in section 4.2 that parses document layout to create hierarchical nodes.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         53
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

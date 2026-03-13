@@ -72,6 +72,19 @@ async def _save_and_register_file(
     }
 
 
+def _to_document_response(doc: dict) -> DocumentResponse:
+    return DocumentResponse(
+        doc_id=doc["doc_id"],
+        filename=doc.get("filename", ""),
+        status=doc.get("status", "unknown"),
+        error=doc.get("error"),
+        created_at=doc.get("created_at"),
+        sub_tenant=doc.get("sub_tenant"),
+        document_date=doc.get("document_date"),
+        document_lang=doc.get("document_lang"),
+    )
+
+
 @router.post(
     "",
     status_code=202,
@@ -79,7 +92,7 @@ async def _save_and_register_file(
     summary="Upload PDF documents",
     description=(
         "Upload one or more PDF files and enqueue background indexing for each accepted file. "
-        "Optional `document_date` and `document_lang` form fields apply to all files in the request. "
+        "Optional `document_date`, `document_lang`, and `sub_tenant` form fields apply to all files in the request. "
         "The response supports partial success through separate `uploaded` and `failed` lists."
     ),
     responses={
@@ -100,6 +113,12 @@ async def upload_documents(
         default=None,
         description="Optional ISO 639-1 language code (e.g. 'en', 'id') for ALL uploaded files. "
                     "Omit or set to 'auto' for automatic detection from extracted text.",
+    ),
+    sub_tenant: Optional[str] = Form(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Optional sub-tenant scope for ALL uploaded files. Omit to make the documents tenant-wide shared.",
     ),
     current_user: dict = Depends(get_current_user),
 ):
@@ -149,6 +168,9 @@ async def upload_documents(
         if document_lang:
             doc_data["document_lang"] = document_lang
 
+        if sub_tenant:
+            doc_data["sub_tenant"] = sub_tenant
+
         # Register document in MongoDB
         await db.create_document(MONGO_URI, MONGO_DB_PREFIX, tenant_id, doc_data)
         # Auto-grant uploader owner access
@@ -161,6 +183,7 @@ async def upload_documents(
         )
         uploaded.append(DocumentResponse(
             doc_id=doc_data["doc_id"], filename=file.filename, status="pending",
+            sub_tenant=sub_tenant,
             document_date=parsed_doc_date,
             document_lang=document_lang,
         ))
@@ -177,24 +200,27 @@ async def upload_documents(
 async def list_documents(
     limit: int = Query(default=50, ge=1, le=200, description="Max documents to return"),
     offset: int = Query(default=0, ge=0, description="Number of documents to skip"),
+    sub_tenant: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Optional sub-tenant scope. Omit to list only tenant-wide shared documents.",
+    ),
     current_user: dict = Depends(get_current_user),
 ):
     """List documents accessible to the current user, sorted by document_date descending."""
     tenant_id = current_user["tenant_id"]
     user_id = current_user["user_id"]
-    docs, _total = await db.list_documents(MONGO_URI, MONGO_DB_PREFIX, tenant_id, user_id, limit=limit, offset=offset)
-    return [
-        DocumentResponse(
-            doc_id=d["doc_id"],
-            filename=d.get("filename", ""),
-            status=d.get("status", "unknown"),
-            error=d.get("error"),
-            created_at=d.get("created_at"),
-            document_date=d.get("document_date"),
-            document_lang=d.get("document_lang"),
-        )
-        for d in docs
-    ]
+    docs, _total = await db.list_documents(
+        MONGO_URI,
+        MONGO_DB_PREFIX,
+        tenant_id,
+        user_id,
+        limit=limit,
+        offset=offset,
+        sub_tenant=sub_tenant,
+    )
+    return [_to_document_response(d) for d in docs]
 
 
 @router.get(
@@ -207,26 +233,27 @@ async def list_documents(
         404: {"description": "Document not found."},
     },
 )
-async def get_document_status(doc_id: str, current_user: dict = Depends(get_current_user)):
+async def get_document_status(
+    doc_id: str,
+    sub_tenant: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Optional sub-tenant scope for access checks. Omit to allow tenant-wide shared docs only.",
+    ),
+    current_user: dict = Depends(get_current_user),
+):
     """Get indexing status for a specific document."""
     tenant_id = current_user["tenant_id"]
     user_id = current_user["user_id"]
 
-    if not await check_doc_access(user_id, tenant_id, doc_id):
+    if not await check_doc_access(user_id, tenant_id, doc_id, sub_tenant=sub_tenant):
         raise HTTPException(status_code=403, detail="Access denied to this document")
 
     doc = await db.get_document(MONGO_URI, MONGO_DB_PREFIX, tenant_id, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return DocumentResponse(
-        doc_id=doc["doc_id"],
-        filename=doc.get("filename", ""),
-        status=doc.get("status", "unknown"),
-        error=doc.get("error"),
-        created_at=doc.get("created_at"),
-        document_date=doc.get("document_date"),
-        document_lang=doc.get("document_lang"),
-    )
+    return _to_document_response(doc)
 
 
 @router.delete(
@@ -309,12 +336,21 @@ async def delete_document(doc_id: str, current_user: dict = Depends(get_current_
         404: {"description": "Raw document file not found."},
     },
 )
-async def download_raw_document(doc_id: str, current_user: dict = Depends(get_current_user)):
+async def download_raw_document(
+    doc_id: str,
+    sub_tenant: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Optional sub-tenant scope for access checks. Omit to allow tenant-wide shared docs only.",
+    ),
+    current_user: dict = Depends(get_current_user),
+):
     """Stream back the original uploaded PDF file."""
     tenant_id = current_user["tenant_id"]
     user_id = current_user["user_id"]
 
-    if not await check_doc_access(user_id, tenant_id, doc_id):
+    if not await check_doc_access(user_id, tenant_id, doc_id, sub_tenant=sub_tenant):
         raise HTTPException(status_code=403, detail="Access denied to this document")
 
     raw_path = await db.get_document_raw_path(MONGO_URI, MONGO_DB_PREFIX, tenant_id, doc_id)

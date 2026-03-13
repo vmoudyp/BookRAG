@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 from pathlib import Path
@@ -45,7 +46,7 @@ def test_gbc_rag_visual_sidecar_fusion_defaults_are_conservative():
     assert cfg.visual_sidecar_query_enabled is False
     assert cfg.visual_sidecar_fusion_enabled is False
     assert cfg.visual_sidecar_fusion_score_mode == "max_norm"
-    assert cfg.visual_sidecar_fusion_min_score == 0.2
+    assert cfg.visual_sidecar_fusion_min_score == pytest.approx(0.2)
 
 
 def test_build_chat_gbc_rag_config_inherits_base_strategy_and_applies_overrides(monkeypatch):
@@ -75,9 +76,9 @@ def test_build_chat_gbc_rag_config_inherits_base_strategy_and_applies_overrides(
     assert rag_cfg.visual_sidecar_query_enabled is True
     assert rag_cfg.visual_sidecar_query_topk == 5
     assert rag_cfg.visual_sidecar_fusion_enabled is True
-    assert rag_cfg.visual_sidecar_fusion_weight == 1.5
+    assert rag_cfg.visual_sidecar_fusion_weight == pytest.approx(1.5)
     assert rag_cfg.visual_sidecar_fusion_score_mode == "rank"
-    assert rag_cfg.visual_sidecar_fusion_min_score == 0.25
+    assert rag_cfg.visual_sidecar_fusion_min_score == pytest.approx(0.25)
     assert base_cfg.visual_sidecar_query_enabled is False
     assert base_cfg.visual_sidecar_fusion_enabled is False
 
@@ -131,19 +132,21 @@ def test_query_single_doc_sync_uses_chat_rag_config_and_answer_query(monkeypatch
     assert captured["init"]["config"].query_topk == 7
 
 
-@pytest.mark.asyncio
-async def test_handle_query_forwards_visual_sidecar_overrides(monkeypatch):
+def test_handle_query_forwards_visual_sidecar_overrides(monkeypatch):
     chat_module = _load_chat_service_module(monkeypatch)
     persisted_messages = []
     captured = {}
 
-    async def fake_create_session(*args, **kwargs):
+    async def fake_create_session(*_args, **_kwargs):
+        await asyncio.sleep(0)
         return "created"
 
-    async def fake_append_message(*args, **kwargs):
+    async def fake_append_message(*args, **_kwargs):
+        await asyncio.sleep(0)
         persisted_messages.append(args[4]["role"])
 
-    async def fake_get_document(*args, **kwargs):
+    async def fake_get_document(*_args, **_kwargs):
+        await asyncio.sleep(0)
         return None
 
     monkeypatch.setattr(chat_module.db, "create_session", fake_create_session, raising=False)
@@ -165,20 +168,22 @@ async def test_handle_query_forwards_visual_sidecar_overrides(monkeypatch):
 
     monkeypatch.setattr(chat_module, "_query_single_doc_sync", fake_query_single_doc_sync)
 
-    result = await chat_module.handle_query(
-        query="find the chart",
-        tenant_id="tenant-a",
-        user_id="user-1",
-        doc_ids=["doc-1"],
-        session_id=None,
-        config_path="config/gbc.yaml",
-        cross_doc=False,
-        visual_sidecar_query_enabled=True,
-        visual_sidecar_query_topk=4,
-        visual_sidecar_fusion_enabled=True,
-        visual_sidecar_fusion_weight=1.75,
-        visual_sidecar_fusion_score_mode="rank",
-        visual_sidecar_fusion_min_score=0.2,
+    result = asyncio.run(
+        chat_module.handle_query(
+            query="find the chart",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            doc_ids=["doc-1"],
+            session_id=None,
+            config_path="config/gbc.yaml",
+            cross_doc=False,
+            visual_sidecar_query_enabled=True,
+            visual_sidecar_query_topk=4,
+            visual_sidecar_fusion_enabled=True,
+            visual_sidecar_fusion_weight=1.75,
+            visual_sidecar_fusion_score_mode="rank",
+            visual_sidecar_fusion_min_score=0.2,
+        )
     )
 
     assert result["answer"] == "document answer"

@@ -47,7 +47,7 @@ def _load_chat_router_module(monkeypatch):
     async def fake_get_current_user():
         return {"user_id": "user-1", "tenant_id": "tenant-a", "role": "user"}
 
-    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids):
+    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids, sub_tenant=None):
         return requested_doc_ids or ["doc-1"]
 
     async def fake_rate_limit_query():
@@ -98,11 +98,12 @@ def test_chat_query_router_forwards_visual_sidecar_overrides(monkeypatch):
     chat_module = _load_chat_router_module(monkeypatch)
     captured = {}
 
-    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids):
+    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids, sub_tenant=None):
         captured["filter"] = {
             "user_id": user_id,
             "tenant_id": tenant_id,
             "requested_doc_ids": requested_doc_ids,
+            "sub_tenant": sub_tenant,
         }
         return ["doc-allowed"]
 
@@ -125,6 +126,7 @@ def test_chat_query_router_forwards_visual_sidecar_overrides(monkeypatch):
                 "query": "find the chart",
                 "session_id": "session-existing",
                 "doc_ids": ["doc-allowed", "doc-denied"],
+                "sub_tenant": "finance",
                 "cross_doc": True,
                 "visual_sidecar_query_enabled": True,
                 "visual_sidecar_query_topk": 4,
@@ -146,6 +148,7 @@ def test_chat_query_router_forwards_visual_sidecar_overrides(monkeypatch):
         "user_id": "user-1",
         "tenant_id": "tenant-a",
         "requested_doc_ids": ["doc-allowed", "doc-denied"],
+        "sub_tenant": "finance",
     }
     assert captured["handle_query"] == {
         "query": "find the chart",
@@ -167,7 +170,7 @@ def test_chat_query_router_forwards_visual_sidecar_overrides(monkeypatch):
 def test_chat_query_router_returns_403_when_no_accessible_docs(monkeypatch):
     chat_module = _load_chat_router_module(monkeypatch)
 
-    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids):
+    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids, sub_tenant=None):
         return []
 
     async def fail_handle_query(**kwargs):
@@ -201,16 +204,19 @@ def test_chat_query_router_openapi_documents_visual_sidecar_overrides(monkeypatc
     query_op = schema["paths"]["/chat/query"]["post"]
     assert query_op["summary"] == "Submit a chat query"
     assert "optional per-request overrides" in query_op["description"]
+    assert "shared+sub-tenant docs" in query_op["description"]
 
     request_ref = query_op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     request_schema_name = request_ref.rsplit("/", 1)[-1]
     request_schema = schema["components"]["schemas"][request_schema_name]
     properties = request_schema["properties"]
 
+    assert "sub_tenant" in properties
     assert "visual_sidecar_query_enabled" in properties
     assert "keep the loaded config value" in properties["visual_sidecar_query_enabled"]["description"]
     assert "visual_sidecar_fusion_score_mode" in properties
     assert "raw" in properties["visual_sidecar_fusion_score_mode"]["description"]
+    assert request_schema["examples"][0]["sub_tenant"] == "finance"
     assert request_schema["examples"][0]["visual_sidecar_fusion_score_mode"] == "max_norm"
 
     response_ref = query_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
@@ -235,6 +241,7 @@ def test_chat_session_router_openapi_documents_session_endpoints(monkeypatch):
     create_schema_name = create_ref.rsplit("/", 1)[-1]
     create_schema = schema["components"]["schemas"][create_schema_name]
     assert create_schema["examples"][0]["doc_ids"] == ["doc-123", "doc-456"]
+    assert create_schema["examples"][0]["sub_tenant"] == "finance"
 
     list_op = schema["paths"]["/chat/sessions"]["get"]
     assert list_op["summary"] == "List chat sessions"
@@ -260,11 +267,12 @@ def test_chat_session_router_creates_session_with_accessible_docs(monkeypatch):
     chat_module = _load_chat_router_module(monkeypatch)
     captured = {}
 
-    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids):
+    async def fake_filter_accessible_docs(user_id, tenant_id, requested_doc_ids, sub_tenant=None):
         captured["filter"] = {
             "user_id": user_id,
             "tenant_id": tenant_id,
             "requested_doc_ids": requested_doc_ids,
+            "sub_tenant": sub_tenant,
         }
         return ["doc-allowed"]
 
@@ -282,7 +290,10 @@ def test_chat_session_router_creates_session_with_accessible_docs(monkeypatch):
     monkeypatch.setattr(uuid, "uuid4", lambda: "session-created")
 
     with _build_test_client(chat_module) as client:
-        response = client.post("/chat/sessions", json={"doc_ids": ["doc-allowed", "doc-denied"]})
+        response = client.post(
+            "/chat/sessions",
+            json={"doc_ids": ["doc-allowed", "doc-denied"], "sub_tenant": "finance"},
+        )
 
     assert response.status_code == 201
     assert response.json() == {"session_id": "session-created"}
@@ -290,6 +301,7 @@ def test_chat_session_router_creates_session_with_accessible_docs(monkeypatch):
         "user_id": "user-1",
         "tenant_id": "tenant-a",
         "requested_doc_ids": ["doc-allowed", "doc-denied"],
+        "sub_tenant": "finance",
     }
     assert captured["create_session"] == {
         "uri": "mongodb://test",
@@ -300,6 +312,7 @@ def test_chat_session_router_creates_session_with_accessible_docs(monkeypatch):
             "user_id": "user-1",
             "doc_ids": ["doc-allowed"],
             "messages": [],
+            "sub_tenant": "finance",
         },
     }
 

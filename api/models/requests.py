@@ -148,6 +148,7 @@ class DocumentResponse(BaseModel):
                     "status": "ready",
                     "error": None,
                     "created_at": "2026-03-11T12:00:00Z",
+                    "sub_tenant": "finance",
                     "document_date": "2025-06-15T00:00:00Z",
                     "document_lang": "en",
                 }
@@ -160,6 +161,11 @@ class DocumentResponse(BaseModel):
     status: str = Field(..., description="Indexing status: pending | indexing | ready | error")
     error: Optional[str] = Field(default=None, description="Error message if status is 'error'")
     created_at: Optional[datetime] = Field(default=None, description="Upload timestamp (UTC)")
+    sub_tenant: Optional[str] = Field(
+        default=None,
+        max_length=_SHORT_STR,
+        description="Optional sub-tenant scope for the document. Omit or `null` for tenant-wide shared documents.",
+    )
     document_date: Optional[datetime] = Field(
         default=None,
         description="User-provided original authoring/publishing date of the document. "
@@ -182,6 +188,7 @@ class BatchUploadResponse(BaseModel):
                             "doc_id": "doc-123",
                             "filename": "report.pdf",
                             "status": "pending",
+                            "sub_tenant": "finance",
                             "document_date": "2025-06-15T00:00:00Z",
                             "document_lang": "en",
                         }
@@ -224,6 +231,7 @@ class ChatQueryRequest(BaseModel):
                 {
                     "query": "What does the revenue chart show?",
                     "doc_ids": ["doc-123"],
+                    "sub_tenant": "finance",
                     "cross_doc": False,
                     "visual_sidecar_query_enabled": True,
                     "visual_sidecar_query_topk": 5,
@@ -245,6 +253,11 @@ class ChatQueryRequest(BaseModel):
     doc_ids: Optional[List[str]] = Field(
         default=None,
         description="Restrict retrieval to specific documents. `null` means all documents the caller can access.",
+    )
+    sub_tenant: Optional[str] = Field(
+        default=None,
+        max_length=_SHORT_STR,
+        description="Optional sub-tenant scope. When omitted, retrieval stays on tenant-wide shared documents only.",
     )
     cross_doc: bool = Field(default=False, description="Enable cross-document retrieval mode.")
     visual_sidecar_query_enabled: Optional[bool] = Field(
@@ -318,7 +331,7 @@ class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
-                {"doc_ids": ["doc-123", "doc-456"]}
+                {"doc_ids": ["doc-123", "doc-456"], "sub_tenant": "finance"}
             ]
         }
     )
@@ -326,6 +339,11 @@ class SessionCreateRequest(BaseModel):
     doc_ids: Optional[List[str]] = Field(
         default=None,
         description="Optional document IDs to attach to the session. Requested IDs are filtered to documents the caller can access.",
+    )
+    sub_tenant: Optional[str] = Field(
+        default=None,
+        max_length=_SHORT_STR,
+        description="Optional sub-tenant scope used when expanding `doc_ids=null` into shared or shared+sub-tenant visibility.",
     )
 
 

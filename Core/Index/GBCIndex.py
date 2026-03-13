@@ -37,18 +37,15 @@ class GBC:
         self.TreeIndex: DocumentTree = tree_index
         self.GraphIndex: Graph = graph_index
 
-        # load the vdb of entities — namespaced by tenant/doc if available
+        # config.save_path is already document-scoped in the API/indexing flow.
+        # Keep the entity VDB directly under that directory to avoid duplicating
+        # tenant/doc path segments.
         if config.graph.refine_type == "basic":
             vdb_name = "kg_vdb_basic"
         else:
             vdb_name = "kg_vdb"
 
-        if config.tenant_id and config.doc_id:
-            self.entity_vdb_path = os.path.join(
-                self.save_dir, config.tenant_id, config.doc_id, vdb_name
-            )
-        else:
-            self.entity_vdb_path = os.path.join(self.save_dir, vdb_name)
+        self.entity_vdb_path = os.path.join(self.save_dir, vdb_name)
 
         self.embedder = TextEmbeddingProvider(
             model_name=config.graph.embedding_config.model_name,

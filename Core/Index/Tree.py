@@ -105,6 +105,10 @@ class TreeNode:
         child_node.depth = self.depth + 1
         self.children.append(child_node)
 
+    def is_leaf(self) -> bool:
+        """Return True when the node has no children in the document tree."""
+        return len(self.children) == 0
+
     def get_meta_info(self):
         return self.meta_info
 

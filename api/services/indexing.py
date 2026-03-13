@@ -44,6 +44,39 @@ def _build_index_sync(
     construct_gbc_index(cfg)
 
 
+def _clear_stale_index_caches(save_path: str) -> None:
+    """Delete per-document caches that must be regenerated on every indexing run.
+
+    We intentionally KEEP the Docling / MinerU PDF-parse cache
+    (``docling/`` and ``<method>/`` subdirectories) because reparsing a PDF is
+    expensive (~30-150 s) and is not affected by extractor changes.
+
+    Cleared artefacts
+    -----------------
+    * ``tree.pkl`` / ``tree.json``  — document tree (built from the parse cache)
+    * ``kg_extractor_res/``         — per-node KG extraction results
+    * ``graph_data_basic.json``     — compiled graph (rebuilt from KG results)
+    """
+    # Tree cache
+    for fname in ("tree.pkl", "tree.json"):
+        fpath = os.path.join(save_path, fname)
+        if os.path.exists(fpath):
+            os.remove(fpath)
+            log.info(f"[cache-clear] Removed stale {fname} from {save_path}")
+
+    # KG extraction cache (per-node JSON files)
+    kg_res_dir = os.path.join(save_path, "kg_extractor_res")
+    if os.path.isdir(kg_res_dir):
+        shutil.rmtree(kg_res_dir)
+        log.info(f"[cache-clear] Removed stale kg_extractor_res/ from {save_path}")
+
+    # Compiled graph data (rebuilt during KG refinement)
+    graph_data = os.path.join(save_path, "graph_data_basic.json")
+    if os.path.exists(graph_data):
+        os.remove(graph_data)
+        log.info(f"[cache-clear] Removed stale graph_data_basic.json from {save_path}")
+
+
 async def run_indexing(
     tenant_id: str,
     doc_id: str,
@@ -55,6 +88,11 @@ async def run_indexing(
     """Async wrapper: update status in MongoDB before/after indexing."""
     save_path = os.path.join(INDEX_SAVE_DIR, tenant_id, doc_id)
     os.makedirs(save_path, exist_ok=True)
+
+    # Clear stale per-document caches so every indexing run starts fresh.
+    # This prevents broken tree/KG caches from a previous (possibly failed or
+    # differently-configured) run from silently masking the current results.
+    _clear_stale_index_caches(save_path)
 
     await db.update_document_status(MONGO_URI, MONGO_DB_PREFIX, tenant_id, doc_id, "indexing")
     try:

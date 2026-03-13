@@ -122,7 +122,7 @@ def test_documents_router_openapi_describes_upload_metadata_and_examples(monkeyp
 
     upload_op = schema["paths"]["/documents"]["post"]
     assert upload_op["summary"] == "Upload PDF documents"
-    assert "Optional `document_date` and `document_lang`" in upload_op["description"]
+    assert "Optional `document_date`, `document_lang`, and `sub_tenant`" in upload_op["description"]
 
     upload_body_ref = upload_op["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
     upload_schema_name = upload_body_ref.rsplit("/", 1)[-1]
@@ -131,23 +131,34 @@ def test_documents_router_openapi_describes_upload_metadata_and_examples(monkeyp
     assert "ISO-8601" in upload_schema["properties"]["document_date"]["description"]
     assert "document_lang" in upload_schema["properties"]
     assert "ISO 639-1" in upload_schema["properties"]["document_lang"]["description"]
+    assert "sub_tenant" in upload_schema["properties"]
 
-    assert schema["paths"]["/documents/{doc_id}"]["get"]["summary"] == "Get document status"
-    assert schema["paths"]["/documents/{doc_id}/raw"]["get"]["summary"] == "Download the original PDF"
+    status_op = schema["paths"]["/documents/{doc_id}"]["get"]
+    raw_op = schema["paths"]["/documents/{doc_id}/raw"]["get"]
+    assert status_op["summary"] == "Get document status"
+    assert raw_op["summary"] == "Download the original PDF"
+    status_params = {param["name"]: param for param in status_op["parameters"]}
+    raw_params = {param["name"]: param for param in raw_op["parameters"]}
+    assert "sub_tenant" in status_params
+    assert "sub_tenant" in raw_params
 
     batch_schema = schema["components"]["schemas"]["BatchUploadResponse"]
+    assert batch_schema["examples"][0]["uploaded"][0]["sub_tenant"] == "finance"
     assert batch_schema["examples"][0]["failed"][0]["error"] == "Only PDF files are supported"
 
 
-def test_documents_router_list_and_status_include_document_lang(monkeypatch):
+def test_documents_router_list_and_status_include_sub_tenant_and_forward_scope(monkeypatch):
     documents_module = _load_documents_router_module(monkeypatch)
+    captured = {}
 
     async def fake_list_documents(*args, **kwargs):
+        captured["list_documents"] = kwargs
         return [
             {
                 "doc_id": "doc-1",
                 "filename": "report.pdf",
                 "status": "ready",
+                "sub_tenant": "finance",
                 "document_lang": "en",
             }
         ], 1
@@ -157,10 +168,12 @@ def test_documents_router_list_and_status_include_document_lang(monkeypatch):
             "doc_id": "doc-1",
             "filename": "report.pdf",
             "status": "ready",
+            "sub_tenant": "finance",
             "document_lang": "en",
         }
 
     async def fake_check_doc_access(*args, **kwargs):
+        captured["check_doc_access"] = kwargs
         return True
 
     monkeypatch.setattr(documents_module.db, "list_documents", fake_list_documents)
@@ -168,11 +181,15 @@ def test_documents_router_list_and_status_include_document_lang(monkeypatch):
     monkeypatch.setattr(documents_module, "check_doc_access", fake_check_doc_access)
 
     with _build_test_client(documents_module) as client:
-        list_response = client.get("/documents")
-        status_response = client.get("/documents/doc-1")
+        list_response = client.get("/documents?sub_tenant=finance")
+        status_response = client.get("/documents/doc-1?sub_tenant=finance")
 
     assert list_response.status_code == 200
+    assert list_response.json()[0]["sub_tenant"] == "finance"
     assert list_response.json()[0]["document_lang"] == "en"
+    assert captured["list_documents"]["sub_tenant"] == "finance"
 
     assert status_response.status_code == 200
+    assert status_response.json()["sub_tenant"] == "finance"
     assert status_response.json()["document_lang"] == "en"
+    assert captured["check_doc_access"]["sub_tenant"] == "finance"

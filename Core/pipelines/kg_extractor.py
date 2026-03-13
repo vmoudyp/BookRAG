@@ -22,6 +22,8 @@ from Core.prompts.kg_prompt import (
     FormulaExtractionResult,
     RoleExtractionResult,
     ROLE_EXTRACTION,
+    RELATIONSHIP_EXTRACTION_FROM_ENTITIES,
+    HYBRID_DOMAIN_ENTITY_TYPES,
 )
 from Core.Common.Memory import Memory
 from Core.Common.Message import Message
@@ -930,6 +932,402 @@ class LLMExtractor(BaseExtractor):
             return {"entities": [], "relations": [], "node_idx": node.index_id}
 
 
+class HybridExtractor(BaseExtractor):
+    """
+    BERT-only NER extractor for Indonesian (Bahasa) documents.
+
+    Uses the Hugging Face token-classification model configured by
+    ``graph_config.hybrid_ner_model`` (default:
+    ``cahya/bert-base-indonesian-NER``) to extract Indonesian entities
+    directly from text without any LLM NER pass.
+
+    Tree-aware extraction policy:
+    - TITLE and TEXT nodes → BERT NER
+    - IMAGE / TABLE / EQUATION nodes → delegated to LLMExtractor
+
+    Factual precision (exact figures, clause numbers, dates) is delegated to
+    the Vector DB (Chroma) layer via embedding retrieval at query time.
+    """
+
+    # BERT models have a 512-subword limit.  Use a conservative character
+    # budget so we never exceed it even with long Indonesian tokens.
+    _BERT_CHAR_LIMIT = 1500
+
+    # Map abbreviated Indonesian NER labels → canonical entity type names.
+    _LABEL_MAP: Dict[str, str] = {
+        "PER": "PERSON",
+        "ORG": "ORGANIZATION",
+        "LOC": "LOCATION",
+        "GPE": "GEOPOLITICAL_ENTITY",
+        "FAC": "FACILITY",
+        "EVT": "EVENT",
+        "WOA": "WORK_OF_ART",
+        "LAW": "LAW",
+        "PRO": "PRODUCT",
+        "PRD": "PRODUCT",
+        "LAN": "LANGUAGE",
+        "DAT": "DATE",
+        "TIM": "TIME",
+        "MON": "MONEY",
+        "QTY": "QUANTITY",
+        "CRD": "CARDINAL",
+        "ORD": "ORDINAL",
+        "PRC": "PERCENT",
+        "NOR": "POLITICAL_GROUP",
+    }
+
+    def __init__(
+        self,
+        graph_config: GraphConfig,
+        llm: LLM,
+        vlm: VLM = None,
+    ):
+        self.graph_config = graph_config
+        self.llm = llm
+        # Reuse the full LLMExtractor for non-text nodes (tables, images, etc.)
+        self._llm_extractor = LLMExtractor(graph_config=graph_config, llm=llm, vlm=vlm)
+        self._ner_pipeline = None  # lazy-loaded on first use
+        self._ner_model_name = graph_config.hybrid_ner_model
+        self._ner_model_ref = self._resolve_ner_model_reference(self._ner_model_name)
+        self._confidence_threshold: float = getattr(
+            graph_config, "ner_confidence_threshold", 0.5
+        )
+
+    # ------------------------------------------------------------------
+    # BERT NER helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_ner_model_reference(model_name: str) -> str:
+        """Resolve an existing local model directory while leaving Hub IDs untouched."""
+        expanded = os.path.abspath(os.path.expanduser(os.path.expandvars(model_name)))
+        return expanded if os.path.isdir(expanded) else model_name
+
+    def _get_ner_pipeline(self):
+        """Lazy-load the HuggingFace NER pipeline from a Hub ID or local directory."""
+        if self._ner_pipeline is not None:
+            return self._ner_pipeline
+        try:
+            from transformers import pipeline as hf_pipeline
+
+            logger.info(f"Loading HuggingFace NER model '{self._ner_model_ref}' …")
+            self._ner_pipeline = hf_pipeline(
+                "ner",
+                model=self._ner_model_ref,
+                device=-1,  # CPU
+            )
+            logger.info("HuggingFace NER model loaded.")
+        except Exception as exc:
+            logger.error(f"Failed to load HuggingFace NER model: {exc}")
+            self._ner_pipeline = None
+        return self._ner_pipeline
+
+    @staticmethod
+    def _parse_bio_label(raw_label: str) -> Tuple[str, str]:
+        label = (raw_label or "").upper()
+        if label in {"", "O"}:
+            return "O", "O"
+        if "-" in label:
+            prefix, base = label.split("-", 1)
+            if prefix in {"B", "I"} and base:
+                return prefix, base
+        return "B", label
+
+    @staticmethod
+    def _normalize_entity_surface(surface: str) -> str:
+        surface = re.sub(r"\s+", " ", surface).strip()
+        surface = re.sub(r"([\(\[\{])\s+", r"\1", surface)
+        surface = re.sub(r"\s+([\)\]\},.;:%])", r"\1", surface)
+        return surface.strip()
+
+    @classmethod
+    def _extend_span_suffix(cls, text: str, start: int, end: int) -> int:
+        while end < len(text):
+            surface = text[start:end]
+            next_char = text[end]
+            if surface.count("(") > surface.count(")") and next_char == ")":
+                end += 1
+                continue
+            if surface.count("[") > surface.count("]") and next_char == "]":
+                end += 1
+                continue
+            if surface.count("{") > surface.count("}") and next_char == "}":
+                end += 1
+                continue
+            break
+        return end
+
+    @staticmethod
+    def _span_join_gap_is_safe(gap_text: str) -> bool:
+        return bool(re.fullmatch(r"[\s\-/&.,:'\"()]*", gap_text or ""))
+
+    @classmethod
+    def _should_merge_token_into_span(
+        cls,
+        chunk: str,
+        span: Dict[str, Any],
+        prefix: str,
+        raw_label: str,
+        token_start: int,
+        token_word: str,
+    ) -> bool:
+        if token_word.startswith("##") and token_start <= span["end"]:
+            return True
+        if prefix == "B":
+            return False
+        gap_text = chunk[span["end"] : token_start] if token_start >= span["end"] else ""
+        if not cls._span_join_gap_is_safe(gap_text):
+            return False
+        dominant_label = max(
+            span["label_scores"].items(),
+            key=lambda item: (item[1], item[0]),
+        )[0]
+        return raw_label in {dominant_label, span["last_label"]}
+
+    @classmethod
+    def _finalize_span(cls, chunk: str, span: Optional[Dict[str, Any]]):
+        if not span:
+            return None
+        end = cls._extend_span_suffix(chunk, span["start"], span["end"])
+        surface = cls._normalize_entity_surface(chunk[span["start"] : end])
+        if not surface or not any(char.isalnum() for char in surface):
+            return None
+        raw_label = max(
+            span["label_scores"].items(),
+            key=lambda item: (item[1], item[0]),
+        )[0]
+        score = sum(span["scores"]) / len(span["scores"])
+        return surface, raw_label, score
+
+    @staticmethod
+    def _split_trailing_corporate_prefix(surface: str) -> Tuple[str, str]:
+        match = re.fullmatch(r"(.+?)\s+(PT\.?)", (surface or "").strip())
+        if not match:
+            return surface, ""
+        base_surface = match.group(1).strip()
+        prefix = match.group(2).strip()
+        if not base_surface:
+            return surface, ""
+        return base_surface, prefix
+
+    @classmethod
+    def _repair_adjacent_corporate_prefix_spans(
+        cls, spans: List[Tuple[str, str, float]]
+    ) -> List[Tuple[str, str, float]]:
+        repaired: List[Tuple[str, str, float]] = []
+        idx = 0
+        while idx < len(spans):
+            surface, raw_label, score = spans[idx]
+            if idx + 1 >= len(spans):
+                repaired.append((surface, raw_label, score))
+                idx += 1
+                continue
+
+            next_surface, next_label, next_score = spans[idx + 1]
+            base_surface, prefix = cls._split_trailing_corporate_prefix(surface)
+            next_has_prefix = bool(re.match(r"^PT\.?($|\s)", next_surface or ""))
+            if raw_label != "ORG" and next_label == "ORG" and prefix and not next_has_prefix:
+                if base_surface:
+                    repaired.append((base_surface, raw_label, score))
+                repaired.append(
+                    (
+                        cls._normalize_entity_surface(f"{prefix} {next_surface}"),
+                        next_label,
+                        next_score,
+                    )
+                )
+                idx += 2
+                continue
+
+            repaired.append((surface, raw_label, score))
+            idx += 1
+        return repaired
+
+    @classmethod
+    def _reconstruct_entity_spans(
+        cls, chunk: str, raw_results: List[Dict[str, Any]]
+    ) -> List[Tuple[str, str, float]]:
+        spans: List[Tuple[str, str, float]] = []
+        current_span: Optional[Dict[str, Any]] = None
+        valid_tokens = [
+            item
+            for item in raw_results
+            if isinstance(item, dict)
+            and isinstance(item.get("start"), int)
+            and isinstance(item.get("end"), int)
+            and item.get("end", 0) > item.get("start", 0)
+        ]
+        valid_tokens.sort(
+            key=lambda item: (
+                item["start"],
+                item["end"],
+                item.get("index", 0),
+            )
+        )
+
+        for item in valid_tokens:
+            prefix, raw_label = cls._parse_bio_label(item.get("entity", ""))
+            if raw_label == "O":
+                finalized = cls._finalize_span(chunk, current_span)
+                if finalized is not None:
+                    spans.append(finalized)
+                current_span = None
+                continue
+
+            token_start = item["start"]
+            token_end = item["end"]
+            token_word = item.get("word", "")
+            token_score = float(item.get("score", 0.0))
+
+            if current_span is None:
+                current_span = {
+                    "start": token_start,
+                    "end": token_end,
+                    "scores": [token_score],
+                    "label_scores": {raw_label: token_score},
+                    "last_label": raw_label,
+                }
+                continue
+
+            if cls._should_merge_token_into_span(
+                chunk,
+                current_span,
+                prefix,
+                raw_label,
+                token_start,
+                token_word,
+            ):
+                current_span["end"] = max(current_span["end"], token_end)
+                current_span["scores"].append(token_score)
+                current_span["label_scores"][raw_label] = (
+                    current_span["label_scores"].get(raw_label, 0.0) + token_score
+                )
+                current_span["last_label"] = raw_label
+                continue
+
+            finalized = cls._finalize_span(chunk, current_span)
+            if finalized is not None:
+                spans.append(finalized)
+            current_span = {
+                "start": token_start,
+                "end": token_end,
+                "scores": [token_score],
+                "label_scores": {raw_label: token_score},
+                "last_label": raw_label,
+            }
+
+        finalized = cls._finalize_span(chunk, current_span)
+        if finalized is not None:
+            spans.append(finalized)
+        return cls._repair_adjacent_corporate_prefix_spans(spans)
+
+    def _bert_extract_entities(self, text: str, node_id: int) -> List[Entity]:
+        """Run BERT NER on *text* (chunked to respect the 512-token limit)."""
+        pipeline = self._get_ner_pipeline()
+        if pipeline is None:
+            return []
+
+        # Split into character-budget chunks; respect sentence boundaries where possible.
+        chunks: List[str] = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= self._BERT_CHAR_LIMIT:
+                chunks.append(remaining)
+                break
+            # Try to split at last sentence boundary within the budget.
+            split_pos = remaining.rfind(".", 0, self._BERT_CHAR_LIMIT)
+            if split_pos == -1:
+                split_pos = self._BERT_CHAR_LIMIT
+            chunks.append(remaining[: split_pos + 1])
+            remaining = remaining[split_pos + 1 :].lstrip()
+
+        entities: List[Entity] = []
+        seen_names: set = set()
+        for chunk in chunks:
+            try:
+                raw_results = pipeline(chunk)
+            except Exception as exc:
+                logger.warning(f"BERT NER failed on chunk for node {node_id}: {exc}")
+                continue
+            for name, raw_label, score in self._reconstruct_entity_spans(
+                chunk, raw_results
+            ):
+                etype = self._LABEL_MAP.get(raw_label, raw_label)
+                if not name or score < self._confidence_threshold:
+                    continue
+                key = re.sub(r"\s+", " ", name).strip().lower()
+                if key in seen_names:
+                    continue
+                seen_names.add(key)
+                entities.append(
+                    Entity(
+                        entity_name=name,
+                        entity_type=etype,
+                        description=f"A {etype} entity identified in the text.",
+                        source_ids={node_id},
+                    )
+                )
+        logger.info(
+            f"Node {node_id}: BERT NER found {len(entities)} entities "
+            f"from {len(chunks)} chunk(s)."
+        )
+        return entities
+
+    # ------------------------------------------------------------------
+    # Main extraction entry-point (BERT-only, no LLM for text nodes)
+    # ------------------------------------------------------------------
+
+    def _extract_kg_from_text(self, node: TreeNode):
+        """
+        Extract entities from a content-bearing text/title node using BERT NER.
+
+        The configured Indonesian HF NER model is expected to expose BIO labels
+        such as LAW, MON, PRC, and PRODUCT variants like PRO/PRD. Factual
+        precision is left to the VDB / Chroma layer.
+        """
+        content = (node.meta_info.content or "").strip()
+        if not content:
+            return [], []
+        # _bert_extract_entities handles its own chunking to respect the 512-token limit.
+        entities = self._bert_extract_entities(content, node.index_id)
+        return entities, []  # no relationships from BERT
+
+    @staticmethod
+    def _should_use_bert_for_node(node: TreeNode) -> bool:
+        return node.type in {NodeType.TEXT, NodeType.TITLE}
+
+    def extract(self, node: TreeNode) -> Dict[str, Any]:
+        try:
+            if self._should_use_bert_for_node(node):
+                entities, relations = self._extract_kg_from_text(node)
+            else:
+                # For tables, images, equations — delegate to LLMExtractor unchanged.
+                return self._llm_extractor.extract(node)
+
+            return {
+                "entities": entities,
+                "relations": relations,
+                "node_idx": node.index_id,
+            }
+        except Exception as exc:
+            logger.exception(f"HybridExtractor error on node {node.index_id}: {exc}")
+            return {"entities": [], "relations": [], "node_idx": node.index_id}
+        finally:
+            logger.info(
+                f"HybridExtractor finished node {node.index_id}."
+            )
+
+    def extract_title(
+        self, node: TreeNode, title_path: List[TreeNode], sibling_nodes: List[TreeNode]
+    ):
+        entities, relations = self._extract_kg_from_text(node)
+        return {
+            "entities": entities,
+            "relations": relations,
+            "node_idx": node.index_id,
+        }
+
+
 class KGExtractor:
     def __init__(
         self,
@@ -944,7 +1342,14 @@ class KGExtractor:
         extractor_type = cfg_graph.extractor_type
         if extractor_type == "local":
             self.extractor = LocalExtractor(cfg_graph.local_model_name)
+        elif extractor_type == "hybrid":
+            self.extractor = HybridExtractor(graph_config=cfg_graph, llm=llm, vlm=vlm)
         elif extractor_type == "llm":
+            self.extractor = LLMExtractor(graph_config=cfg_graph, llm=llm, vlm=vlm)
+        else:
+            logger.warning(
+                f"Unknown extractor_type '{extractor_type}', falling back to 'llm'."
+            )
             self.extractor = LLMExtractor(graph_config=cfg_graph, llm=llm, vlm=vlm)
 
         self.save_path = os.path.join(save_path, "kg_extractor_res")

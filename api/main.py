@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.db import mongodb as db
 from api.dependencies import MONGO_URI, MONGO_DB_PREFIX, MONGO_SYSTEM_DB, THREAD_POOL
-from api.routers import auth, documents, chat, tenants, entities
+from api.routers import auth, documents, chat, tenants, entities, workbench
 
 
 # ── Structured JSON logging ──────────────────────────────────────────────────
@@ -170,6 +170,7 @@ app.include_router(tenants.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(entities.router)
+app.include_router(workbench.router)
 
 
 @app.get("/health")

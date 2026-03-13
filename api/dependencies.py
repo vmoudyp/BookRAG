@@ -5,10 +5,10 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+import bcrypt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from api.db import mongodb as db
 
@@ -48,16 +48,18 @@ THREAD_POOL = ThreadPoolExecutor(
 )
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def create_access_token(data: dict) -> str:
@@ -96,7 +98,7 @@ def decode_refresh_token(token: str) -> dict:
 
 # ── Current-user dependency ───────────────────────────────────────────────────
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     credentials_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -117,7 +119,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     return {"user_id": user_id, "tenant_id": tenant_id, "role": role}
 
 
-async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
@@ -125,17 +127,47 @@ async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
 
 # ── Permission check ─────────────────────────────────────────────────────────
 
-async def check_doc_access(user_id: str, tenant_id: str, doc_id: str) -> bool:
-    accessible = await db.get_accessible_doc_ids(MONGO_URI, MONGO_DB_PREFIX, tenant_id, user_id)
+async def check_doc_access(
+    user_id: str,
+    tenant_id: str,
+    doc_id: str,
+    sub_tenant: Optional[str] = None,
+) -> bool:
+    accessible = await db.get_accessible_doc_ids(
+        MONGO_URI,
+        MONGO_DB_PREFIX,
+        tenant_id,
+        user_id,
+        sub_tenant=sub_tenant,
+        include_permissions=True,
+    )
     return doc_id in accessible
 
 
-async def filter_accessible_docs(user_id: str, tenant_id: str, requested_doc_ids: Optional[list]) -> list:
-    """Return intersection of requested_doc_ids with what user can access. If requested is None, return all accessible."""
-    accessible = await db.get_accessible_doc_ids(MONGO_URI, MONGO_DB_PREFIX, tenant_id, user_id)
+async def filter_accessible_docs(
+    user_id: str,
+    tenant_id: str,
+    requested_doc_ids: Optional[list],
+    sub_tenant: Optional[str] = None,
+) -> list:
+    """Return scope-filtered docs, or intersect requested_doc_ids with accessible docs.
+
+    When no specific ``doc_ids`` are requested, use only the shared/shared+sub-tenant
+    visibility scope. When the caller explicitly requests document IDs, preserve
+    explicit permission-based access as a compatibility fallback.
+    """
+    accessible = await db.get_accessible_doc_ids(
+        MONGO_URI,
+        MONGO_DB_PREFIX,
+        tenant_id,
+        user_id,
+        sub_tenant=sub_tenant,
+        include_permissions=requested_doc_ids is not None,
+    )
     if requested_doc_ids is None:
         return accessible
-    return [d for d in requested_doc_ids if d in accessible]
+    accessible_set = set(accessible)
+    return [d for d in requested_doc_ids if d in accessible_set]
 
 
 # ── In-memory sliding-window rate limiter ────────────────────────────────────
@@ -170,7 +202,7 @@ _login_bucket = _RateBucket()
 _query_bucket = _RateBucket()
 
 
-async def rate_limit_login(request: Request):
+def rate_limit_login(request: Request):
     """Dependency: enforce per-IP rate limit on login."""
     client_ip = request.client.host if request.client else "unknown"
     if not _login_bucket.check(client_ip, _LOGIN_RPM):
@@ -180,7 +212,7 @@ async def rate_limit_login(request: Request):
         )
 
 
-async def rate_limit_query(current_user: dict = Depends(get_current_user)):
+def rate_limit_query(current_user: dict = Depends(get_current_user)):
     """Dependency: enforce per-user rate limit on chat queries."""
     key = f"{current_user['tenant_id']}:{current_user['user_id']}"
     if not _query_bucket.check(key, _QUERY_RPM):

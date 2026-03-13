@@ -89,6 +89,9 @@ class SystemConfig(BaseModel):
     )
 
     # Database configurations
+    # NOTE: typed as Any to allow runtime replacement with FalkorDBConfig instances
+    # in api/services/indexing.py.  Callers must check isinstance(cfg.falkordb,
+    # FalkorDBConfig) or guard on BOOKRAG_FALKORDB_HOST before using it as an object.
     falkordb: Any = Field(default_factory=FalkorDBConfig)
     mongodb: Any = Field(default_factory=MongoDBConfig)
 
@@ -118,4 +121,13 @@ def load_system_config(path: str = "../configs/default.yaml") -> SystemConfig:
             )
 
     cfg = SystemConfig(**raw_config)
+
+    # Coerce falkordb/mongodb dicts (loaded from YAML as plain dicts) into their
+    # proper dataclass instances so that method calls (e.g. graph_name_for_doc)
+    # work correctly without requiring a BOOKRAG_FALKORDB_HOST env override.
+    if isinstance(cfg.falkordb, dict):
+        cfg.falkordb = FalkorDBConfig(**cfg.falkordb)
+    if isinstance(cfg.mongodb, dict):
+        cfg.mongodb = MongoDBConfig(**cfg.mongodb)
+
     return cfg

@@ -4,9 +4,16 @@
       "entity_name": "6.2 overall results",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of 'Experiments' within the BookRAG paper, this section presents the aggregate performance metrics comparing the proposed method against baseline approaches on document QA tasks.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         150
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [],

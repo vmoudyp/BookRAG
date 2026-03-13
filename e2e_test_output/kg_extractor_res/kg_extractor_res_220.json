@@ -4,9 +4,16 @@
       "entity_name": "a experimental details",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of the main paper 'BookRAG: A Hierarchical Structure-aware Index-based Approach for Retrieval-Augmented Generation on Complex Documents', this section provides the specific configuration, setup, and parameters used to conduct the experiments described in the study.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         220
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [],

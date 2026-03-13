@@ -4,33 +4,61 @@
       "entity_name": "5.3 structured execution",
       "entity_type": "SECTION_TITLE",
       "description": "As a subsection of 'Agent-Based Retrieval', this section details the retrieval process within the BookRAG framework, specifically focusing on operations executed under the principles of In-Context Few-Shot Training (IFT) and generation.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         123
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "retrieval process",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "Refers to the specific mechanism for retrieving information from the BookIndex as described in section 5.3.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         123
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "ift principles",
       "entity_type": "METHOD_OR_TECHNIQUE",
       "description": "Refers to the In-Context Few-Shot Training principles that guide the execution logic detailed in section 5.3.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         123
-      ]
+      ],
+      "role_assignments": []
     },
     {
       "entity_name": "generation",
       "entity_type": "TASK_OR_PROBLEM",
       "description": "Refers to the generative component integrated into the structured execution workflow mentioned in section 5.3.",
+      "entity_id": "",
+      "canonical_id": "",
+      "entity_role": "provisional",
+      "aliases": [],
+      "mapping_confidence": 0.0,
+      "ontology_source": "",
       "source_ids": [
         123
-      ]
+      ],
+      "role_assignments": []
     }
   ],
   "relations": [

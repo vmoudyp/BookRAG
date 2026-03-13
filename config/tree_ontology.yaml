@@ -1,0 +1,8 @@
+entities:
+  - ontology_id: "product:bookrag"
+    canonical_name: "bookrag"
+    entity_type: "PRODUCT"
+    description: "The BookRAG application and retrieval pipeline."
+    aliases:
+      - "book rag"
+      - "book-rag"
