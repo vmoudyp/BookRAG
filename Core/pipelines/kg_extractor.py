@@ -1328,6 +1328,194 @@ class HybridExtractor(BaseExtractor):
         }
 
 
+class FlairExtractor(BaseExtractor):
+    """
+    Flair NER extractor for high-quality English (or multilingual) entity extraction.
+
+    Uses a pre-trained Flair SequenceTagger model (e.g. ``flair/ner-english-large``)
+    to identify named entities in text nodes without any LLM NER pass.
+
+    Tree-aware extraction policy:
+    - TEXT and TITLE nodes → Flair NER
+    - IMAGE / TABLE / EQUATION nodes → delegated to LLMExtractor
+
+    Reference: https://github.com/flairNLP/flair
+    """
+
+    # Flair models have no hard sub-word limit but keep chunks modest for memory.
+    _FLAIR_CHAR_LIMIT = 2000
+
+    # Map Flair CoNLL / OntoNotes labels → canonical entity type names used by
+    # the rest of the pipeline.
+    _LABEL_MAP: Dict[str, str] = {
+        # CoNLL-03 labels (flair/ner-english-large)
+        "PER":  "PERSON",
+        "ORG":  "ORGANIZATION",
+        "LOC":  "LOCATION",
+        "MISC": "MISCELLANEOUS",
+        # OntoNotes-style labels (flair/ner-english-ontonotes-large)
+        "PERSON":       "PERSON",
+        "GPE":          "GEOPOLITICAL_ENTITY",
+        "DATE":         "DATE",
+        "TIME":         "TIME",
+        "MONEY":        "MONEY",
+        "PERCENT":      "PERCENT",
+        "CARDINAL":     "CARDINAL",
+        "ORDINAL":      "ORDINAL",
+        "NORP":         "NATIONALITY_OR_GROUP",
+        "FAC":          "FACILITY",
+        "PRODUCT":      "PRODUCT",
+        "EVENT":        "EVENT",
+        "WORK_OF_ART":  "WORK_OF_ART",
+        "LAW":          "LAW",
+        "LANGUAGE":     "LANGUAGE",
+        "QUANTITY":     "QUANTITY",
+    }
+
+    def __init__(
+        self,
+        graph_config: GraphConfig,
+        llm: LLM,
+        vlm: VLM = None,
+    ):
+        self.graph_config = graph_config
+        # Reuse LLMExtractor for non-text nodes (tables, images, equations).
+        self._llm_extractor = LLMExtractor(graph_config=graph_config, llm=llm, vlm=vlm)
+        self._tagger = None  # lazy-loaded on first use
+        self._model_name: str = getattr(
+            graph_config, "flair_ner_model", "flair/ner-english-large"
+        )
+        self._confidence_threshold: float = getattr(
+            graph_config, "flair_confidence_threshold", 0.5
+        )
+
+    # ------------------------------------------------------------------
+    # Flair model helpers
+    # ------------------------------------------------------------------
+
+    def _get_tagger(self):
+        """Lazy-load the Flair SequenceTagger (downloads from Hub on first call)."""
+        if self._tagger is not None:
+            return self._tagger
+        try:
+            from flair.models import SequenceTagger
+            logger.info(f"Loading Flair NER model '{self._model_name}' …")
+            self._tagger = SequenceTagger.load(self._model_name)
+            logger.info("Flair NER model loaded.")
+        except Exception as exc:
+            logger.error(f"Failed to load Flair NER model '{self._model_name}': {exc}")
+            self._tagger = None
+        return self._tagger
+
+    def _flair_extract_entities(self, text: str, node_id: int) -> List[Entity]:
+        """Run Flair NER on *text*, splitting into character-budget chunks."""
+        tagger = self._get_tagger()
+        if tagger is None:
+            return []
+
+        # Chunk by character budget; prefer sentence boundaries.
+        chunks: List[str] = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= self._FLAIR_CHAR_LIMIT:
+                chunks.append(remaining)
+                break
+            split_pos = remaining.rfind(".", 0, self._FLAIR_CHAR_LIMIT)
+            if split_pos == -1:
+                split_pos = self._FLAIR_CHAR_LIMIT
+            chunks.append(remaining[: split_pos + 1])
+            remaining = remaining[split_pos + 1 :].lstrip()
+
+        entities: List[Entity] = []
+        seen_keys: set = set()
+
+        for chunk in chunks:
+            try:
+                from flair.data import Sentence
+                sentence = Sentence(chunk)
+                tagger.predict(sentence)
+            except Exception as exc:
+                logger.warning(
+                    f"Flair NER inference failed for node {node_id}: {exc}"
+                )
+                continue
+
+            for span in sentence.get_spans("ner"):
+                name = span.text.strip()
+                score: float = span.score           # mean confidence across sub-tokens
+                raw_label: str = span.tag.upper()   # e.g. "PER", "ORG"
+
+                if not name or score < self._confidence_threshold:
+                    continue
+
+                etype = self._LABEL_MAP.get(raw_label, raw_label)
+                dedup_key = re.sub(r"\s+", " ", name).strip().lower()
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
+
+                entities.append(
+                    Entity(
+                        entity_name=name,
+                        entity_type=etype,
+                        description=f"A {etype} entity identified by Flair NER.",
+                        source_ids={node_id},
+                    )
+                )
+
+        logger.info(
+            f"Node {node_id}: Flair NER found {len(entities)} entities "
+            f"from {len(chunks)} chunk(s) (threshold={self._confidence_threshold})."
+        )
+        return entities
+
+    # ------------------------------------------------------------------
+    # BaseExtractor interface
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_text_node(node: TreeNode) -> bool:
+        return node.type in {NodeType.TEXT, NodeType.TITLE}
+
+    def _extract_kg_from_text(self, node: TreeNode) -> Tuple[List[Entity], list]:
+        content = (node.meta_info.content or "").strip()
+        if not content:
+            return [], []
+        entities = self._flair_extract_entities(content, node.index_id)
+        return entities, []  # Flair produces no relation predictions
+
+    def extract(self, node: TreeNode) -> Dict[str, Any]:
+        try:
+            if self._is_text_node(node):
+                entities, relations = self._extract_kg_from_text(node)
+            else:
+                # Tables, images, equations → full LLM extraction.
+                return self._llm_extractor.extract(node)
+
+            return {
+                "entities": entities,
+                "relations": relations,
+                "node_idx": node.index_id,
+            }
+        except Exception as exc:
+            logger.exception(
+                f"FlairExtractor error on node {node.index_id}: {exc}"
+            )
+            return {"entities": [], "relations": [], "node_idx": node.index_id}
+        finally:
+            logger.info(f"FlairExtractor finished node {node.index_id}.")
+
+    def extract_title(
+        self, node: TreeNode, title_path: List[TreeNode], sibling_nodes: List[TreeNode]
+    ):
+        entities, relations = self._extract_kg_from_text(node)
+        return {
+            "entities": entities,
+            "relations": relations,
+            "node_idx": node.index_id,
+        }
+
+
 class KGExtractor:
     def __init__(
         self,
@@ -1344,6 +1532,8 @@ class KGExtractor:
             self.extractor = LocalExtractor(cfg_graph.local_model_name)
         elif extractor_type == "hybrid":
             self.extractor = HybridExtractor(graph_config=cfg_graph, llm=llm, vlm=vlm)
+        elif extractor_type == "flair":
+            self.extractor = FlairExtractor(graph_config=cfg_graph, llm=llm, vlm=vlm)
         elif extractor_type == "llm":
             self.extractor = LLMExtractor(graph_config=cfg_graph, llm=llm, vlm=vlm)
         else:

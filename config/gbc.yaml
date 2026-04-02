@@ -40,6 +40,7 @@ tree:
 
 graph:
   # Options: "llm" | "local" (spaCy English) | "hybrid" (BERT-only, no LLM for NER)
+  #          "flair" (Flair NER, high-accuracy English/multilingual, no LLM for NER)
   extractor_type: "hybrid"
   local_model_name: "en_core_web_sm"
   # Hugging Face model ID or existing local model directory for Indonesian NER.
@@ -47,6 +48,14 @@ graph:
   hybrid_ner_model: "cahya/bert-base-indonesian-NER"
   # Minimum BERT confidence score to accept an entity span (0.0–1.0)
   ner_confidence_threshold: 0.5
+  # Flair NER model — Hub ID or local path. Used when extractor_type = "flair".
+  # Recommended models:
+  #   flair/ner-english-large          — 4-class CoNLL (PER/ORG/LOC/MISC), highest accuracy
+  #   flair/ner-english-ontonotes-large — 18-class OntoNotes (GPE/DATE/MONEY/etc.)
+  #   flair/ner-multi-fast             — multilingual, lower latency
+  flair_ner_model: "flair/ner-english-large"
+  # Minimum Flair confidence score to accept an entity span (0.0–1.0)
+  flair_confidence_threshold: 0.5
   image_description_force: False
   max_gleaning: 0
   text_extraction_scope: "body_text_leaves"
